@@ -1,0 +1,352 @@
+From 183237fe19563e44f7f323f490583f3f3b25c4fe Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 23:15:06 +0530
+Subject: [PATCH] Player design style, after ArchiveTune's setting of the same
+ name
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ArchiveTune (rukamori/ArchiveTune) keeps a persisted PlayerDesignStyle
+enum picked in Appearance → Player; Lokal now has the same: Lokal (the
+modern player), Classic (the unwired ClassicFullPlayerScreen, finally
+reached), and Immersive (edge-to-edge artwork, absorbing the old
+Fullscreen cover toggle — the preference migrates on load).
+
+Every path that opens Now Playing (tap, pull-up, mini-player long-press)
+routes by the style. The picker lives in Appearance → Now Playing.
+Verified on an emulator: Classic selected, the classic layout opens.
+---
+ lib/core/theme/lokal_appearance.dart          | 52 +++++++++++++++----
+ lib/core/utils/navigation_helper.dart         | 24 ++++++++-
+ .../lokal/groups/appearance_group.dart        | 37 +++++++++++--
+ lib/widgets/common/floating_mini_player.dart  |  4 +-
+ test/core/theme/lokal_appearance_test.dart    | 33 ++++++++++--
+ 5 files changed, 128 insertions(+), 22 deletions(-)
+
+diff --git a/lib/core/theme/lokal_appearance.dart b/lib/core/theme/lokal_appearance.dart
+index 6d15446..96205ac 100644
+--- a/lib/core/theme/lokal_appearance.dart
++++ b/lib/core/theme/lokal_appearance.dart
+@@ -9,6 +9,26 @@ import 'lokal_tokens.dart';
+ 
+ enum LokalPerformanceLevel { full, performance, ultra }
+ 
++/// The full player's design style — ArchiveTune's "Player design style"
++/// (Appearance → Player) on Lokal's own screens: the modern Lokal player,
++/// the classic layout, or edge-to-edge artwork, which used to be the
++/// Fullscreen cover toggle.
++enum LokalPlayerDesignStyle {
++  lokal('Lokal'),
++  classic('Classic'),
++  immersive('Immersive');
++
++  const LokalPlayerDesignStyle(this.label);
++
++  final String label;
++
++  static LokalPlayerDesignStyle fromKey(String? key) =>
++      LokalPlayerDesignStyle.values.firstWhere(
++        (style) => style.name == key,
++        orElse: () => LokalPlayerDesignStyle.lokal,
++      );
++}
++
+ /// The listener's look: theme, accent, text size and glass.
+ ///
+ /// Mirrors desktop Lokal's Appearance settings. As on desktop, picking a
+@@ -22,12 +42,15 @@ class LokalAppearance {
+     this.textScale = 1.0,
+     this.performanceMode = true,
+     this.ultraPerformanceMode = false,
+-    this.fullscreenCover = false,
++    this.playerDesignStyle = LokalPlayerDesignStyle.lokal,
+     this.unboxedPlayerControls = false,
+   });
+ 
+   final LokalThemeId theme;
+ 
++  /// Which full player opens: Lokal, Classic or Immersive.
++  final LokalPlayerDesignStyle playerDesignStyle;
++
+   /// A preset chosen on top of the theme; null uses the theme's own accent.
+   final LokalAccent? accent;
+ 
+@@ -47,7 +70,10 @@ class LokalAppearance {
+       : LokalPerformanceLevel.full;
+ 
+   /// Edge-to-edge artwork behind full-player controls, with no live blur.
+-  final bool fullscreenCover;
++  /// The Immersive style, kept as a getter for everything that read the old
++  /// Fullscreen cover toggle.
++  bool get fullscreenCover =>
++      playerDesignStyle == LokalPlayerDesignStyle.immersive;
+   final bool unboxedPlayerControls;
+ 
+   static const minTextScale = 0.7;
+@@ -62,7 +88,7 @@ class LokalAppearance {
+     double? textScale,
+     bool? performanceMode,
+     bool? ultraPerformanceMode,
+-    bool? fullscreenCover,
++    LokalPlayerDesignStyle? playerDesignStyle,
+     bool? unboxedPlayerControls,
+   }) => LokalAppearance(
+     theme: theme ?? this.theme,
+@@ -70,7 +96,7 @@ class LokalAppearance {
+     textScale: (textScale ?? this.textScale).clamp(minTextScale, maxTextScale),
+     performanceMode: performanceMode ?? this.performanceMode,
+     ultraPerformanceMode: ultraPerformanceMode ?? this.ultraPerformanceMode,
+-    fullscreenCover: fullscreenCover ?? this.fullscreenCover,
++    playerDesignStyle: playerDesignStyle ?? this.playerDesignStyle,
+     unboxedPlayerControls: unboxedPlayerControls ?? this.unboxedPlayerControls,
+   );
+ 
+@@ -80,7 +106,7 @@ class LokalAppearance {
+     'textScale': textScale,
+     'performanceMode': performanceMode,
+     'ultraPerformanceMode': ultraPerformanceMode,
+-    'fullscreenCover': fullscreenCover,
++    'playerDesignStyle': playerDesignStyle.name,
+     'unboxedPlayerControls': unboxedPlayerControls,
+   };
+ 
+@@ -97,7 +123,13 @@ class LokalAppearance {
+           json['ultraPerformanceMode'] == true ||
+           (json['performanceMode'] as bool? ?? true),
+       ultraPerformanceMode: json['ultraPerformanceMode'] as bool? ?? false,
+-      fullscreenCover: json['fullscreenCover'] as bool? ?? false,
++      // Fullscreen cover from before the design-style setting became the
++      // Immersive style.
++      playerDesignStyle: json['playerDesignStyle'] is String
++          ? LokalPlayerDesignStyle.fromKey(json['playerDesignStyle'] as String)
++          : (json['fullscreenCover'] == true
++                ? LokalPlayerDesignStyle.immersive
++                : LokalPlayerDesignStyle.lokal),
+       unboxedPlayerControls: json['unboxedPlayerControls'] as bool? ?? false,
+     );
+   }
+@@ -110,7 +142,7 @@ class LokalAppearance {
+       other.textScale == textScale &&
+       other.performanceMode == performanceMode &&
+       other.ultraPerformanceMode == ultraPerformanceMode &&
+-      other.fullscreenCover == fullscreenCover &&
++      other.playerDesignStyle == playerDesignStyle &&
+       other.unboxedPlayerControls == unboxedPlayerControls;
+ 
+   @override
+@@ -120,7 +152,7 @@ class LokalAppearance {
+     textScale,
+     performanceMode,
+     ultraPerformanceMode,
+-    fullscreenCover,
++    playerDesignStyle,
+     unboxedPlayerControls,
+   );
+ }
+@@ -211,8 +243,8 @@ class LokalAppearanceNotifier extends Notifier<LokalAppearance> {
+   Future<void> setUnboxedPlayerControls(bool value) =>
+       _commit(state.copyWith(unboxedPlayerControls: value));
+ 
+-  Future<void> setFullscreenCover(bool value) =>
+-      _commit(state.copyWith(fullscreenCover: value));
++  Future<void> setPlayerDesignStyle(LokalPlayerDesignStyle style) =>
++      _commit(state.copyWith(playerDesignStyle: style));
+ 
+   Future<void> setPerformanceMode(bool value) => _commit(
+     state.copyWith(
+diff --git a/lib/core/utils/navigation_helper.dart b/lib/core/utils/navigation_helper.dart
+index e8b527f..02204d6 100644
+--- a/lib/core/utils/navigation_helper.dart
++++ b/lib/core/utils/navigation_helper.dart
+@@ -1,6 +1,9 @@
+ import 'dart:async';
+ 
++import 'package:flick/core/theme/lokal_appearance.dart';
++import 'package:flick/features/player/screens/classic_full_player_screen.dart';
+ import 'package:flutter/material.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:flick/core/constants/app_constants.dart';
+ import 'package:flick/core/navigation/root_navigator.dart';
+ import 'package:flick/features/player/screens/full_player_screen.dart';
+@@ -86,7 +89,7 @@ class NavigationHelper {
+           : Navigator.of(context);
+       final route = LokalPlayerRoute<int>(
+         builder: (context) =>
+-            FullPlayerScreen(key: playerKey, heroTag: heroTag),
++            playerScreenFor(context, playerKey, heroTag),
+         startTop: startTop,
+         initialProgress: initialProgress,
+         sourceArtwork: sourceArtwork,
+@@ -128,7 +131,7 @@ class NavigationHelper {
+     final navigator = rootNavigatorKey.currentState ?? Navigator.of(context);
+     return LokalPlayerPull.start(
+       navigator,
+-      builder: (_) => FullPlayerScreen(key: playerKey, heroTag: heroTag),
++      builder: (context) => playerScreenFor(context, playerKey, heroTag),
+       startTop: startTop,
+       onOpen: onOpen,
+       sourceArtwork: sourceArtwork,
+@@ -205,3 +208,20 @@ class NavigationHelper {
+     );
+   }
+ }
++
++
++/// The full player for the chosen design style: the classic layout when
++/// Classic is picked, the modern screen otherwise (Immersive is the modern
++/// screen with edge-to-edge artwork, via the appearance's fullscreenCover).
++Widget playerScreenFor(BuildContext context, Key? playerKey, String heroTag) {
++  var style = LokalPlayerDesignStyle.lokal;
++  try {
++    final container = ProviderScope.containerOf(context, listen: false);
++    style = container.read(lokalAppearanceProvider).playerDesignStyle;
++  } catch (_) {
++    // Widget tests navigate without a ProviderScope: the modern player.
++  }
++  return style == LokalPlayerDesignStyle.classic
++      ? ClassicFullPlayerScreen(heroTag: heroTag)
++      : FullPlayerScreen(key: playerKey, heroTag: heroTag);
++}
+diff --git a/lib/features/settings/lokal/groups/appearance_group.dart b/lib/features/settings/lokal/groups/appearance_group.dart
+index a79eee3..7b1c121 100644
+--- a/lib/features/settings/lokal/groups/appearance_group.dart
++++ b/lib/features/settings/lokal/groups/appearance_group.dart
+@@ -103,13 +103,40 @@ List<LokalSettingsSection> appearanceSettings(
+           value: appearance.unboxedPlayerControls,
+           onChanged: look.setUnboxedPlayerControls,
+         ),
+-        LokalSettingRow.toggle(
+-          label: lokalText('Fullscreen cover'),
++        LokalSettingRow(
++          label: lokalText('Player design style'),
+           description: lokalText(
+-            'Extend album covers behind the header and fade them into the player. Spotify Canvas fills the screen.',
++            'Which Now Playing opens: Lokal, the classic layout, or edge-to-edge artwork.',
++          ),
++          stacked: true,
++          trailing: Builder(
++            builder: (context) {
++              Widget chip(LokalPlayerDesignStyle style) {
++                final selected = appearance.playerDesignStyle == style;
++                return Padding(
++                  padding: const EdgeInsets.only(right: 8, top: 8),
++                  child: LokalSettingButton(
++                    label: lokalText(
++                      selected ? '{arg0} ✓' : style.label,
++                      args: {'arg0': style.label},
++                    ),
++                    onPressed: selected
++                        ? null
++                        : () {
++                            HapticFeedback.selectionClick();
++                            look.setPlayerDesignStyle(style);
++                          },
++                  ),
++                );
++              }
++
++              return Wrap(
++                children: [
++                  for (final style in LokalPlayerDesignStyle.values) chip(style),
++                ],
++              );
++            },
+           ),
+-          value: appearance.fullscreenCover,
+-          onChanged: look.setFullscreenCover,
+         ),
+         LokalSettingRow.toggle(
+           label: lokalText('Moving covers'),
+diff --git a/lib/widgets/common/floating_mini_player.dart b/lib/widgets/common/floating_mini_player.dart
+index 28d623b..73c29a7 100644
+--- a/lib/widgets/common/floating_mini_player.dart
++++ b/lib/widgets/common/floating_mini_player.dart
+@@ -2,9 +2,9 @@ import 'dart:async';
+ 
+ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:flick/core/utils/navigation_helper.dart';
+ import 'package:flick/core/theme/adaptive_color_provider.dart';
+ import 'package:flick/core/theme/app_colors.dart';
+-import 'package:flick/features/player/screens/full_player_screen.dart';
+ import 'package:flick/providers/providers.dart';
+ import 'package:flick/widgets/common/cached_image_widget.dart';
+ import 'package:flick/widgets/common/flick_artwork_placeholder.dart';
+@@ -85,7 +85,7 @@ class _FloatingMiniPlayerState extends ConsumerState<FloatingMiniPlayer>
+       Navigator.of(context).push(
+         PageRouteBuilder(
+           pageBuilder: (context, animation, secondaryAnimation) =>
+-              const FullPlayerScreen(heroTag: _heroTag),
++              playerScreenFor(context, null, _heroTag),
+           transitionsBuilder: (context, animation, secondaryAnimation, child) {
+             const begin = Offset(0.0, 1.0);
+             const end = Offset.zero;
+diff --git a/test/core/theme/lokal_appearance_test.dart b/test/core/theme/lokal_appearance_test.dart
+index 0bb864a..5fd223e 100644
+--- a/test/core/theme/lokal_appearance_test.dart
++++ b/test/core/theme/lokal_appearance_test.dart
+@@ -18,7 +18,7 @@ void main() {
+       accent: LokalAccent.teal,
+       textScale: 1.2,
+       performanceMode: true,
+-      fullscreenCover: true,
++      playerDesignStyle: LokalPlayerDesignStyle.immersive,
+     );
+     expect(LokalAppearance.fromJson(look.toJson()), look);
+     expect(
+@@ -36,7 +36,7 @@ void main() {
+     final notifier = container.read(lokalAppearanceProvider.notifier);
+     await notifier.setAccent(LokalAccent.orange);
+     await notifier.setTextScale(1.3);
+-    await notifier.setFullscreenCover(true);
++    await notifier.setPlayerDesignStyle(LokalPlayerDesignStyle.immersive);
+     await notifier.selectTheme(LokalThemeId.forest);
+     final look = container.read(lokalAppearanceProvider);
+     expect(look.theme, LokalThemeId.forest);
+@@ -55,7 +55,7 @@ void main() {
+     await first
+         .read(lokalAppearanceProvider.notifier)
+         .setAccent(LokalAccent.cyan);
+-    await first.read(lokalAppearanceProvider.notifier).setFullscreenCover(true);
++    await first.read(lokalAppearanceProvider.notifier).setPlayerDesignStyle(LokalPlayerDesignStyle.immersive);
+     first.dispose();
+ 
+     final prefs = await SharedPreferences.getInstance();
+@@ -72,6 +72,33 @@ void main() {
+     expect(look.fullscreenCover, isTrue);
+   });
+ 
++  test('the player design style round-trips and drives fullscreen cover', () {
++    const look = LokalAppearance(
++      playerDesignStyle: LokalPlayerDesignStyle.classic,
++    );
++    expect(LokalAppearance.fromJson(look.toJson()), look);
++    expect(look.fullscreenCover, isFalse);
++    const immersive = LokalAppearance(
++      playerDesignStyle: LokalPlayerDesignStyle.immersive,
++    );
++    expect(immersive.fullscreenCover, isTrue);
++  });
++
++  test('the old fullscreen-cover preference becomes the Immersive style', () {
++    final migrated = LokalAppearance.fromJson(const {
++      'fullscreenCover': true,
++      'unboxedPlayerControls': true,
++    });
++    expect(migrated.playerDesignStyle, LokalPlayerDesignStyle.immersive);
++    expect(migrated.fullscreenCover, isTrue);
++    expect(migrated.unboxedPlayerControls, isTrue);
++    expect(
++      LokalAppearance.fromJson(const {'fullscreenCover': false})
++          .playerDesignStyle,
++      LokalPlayerDesignStyle.lokal,
++    );
++  });
++
+   test('a damaged saved value falls back to the defaults', () async {
+     SharedPreferences.setMockInitialValues({
+       LokalAppearanceNotifier.prefKey: '{not json',
+-- 
+2.54.0 (Apple Git-157)
+
