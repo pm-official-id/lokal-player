@@ -14,6 +14,7 @@ Get the builds from the [Releases](https://github.com/pm-official-id/lokal-playe
 | `Lokal-11.1.6-arm64.dmg` | macOS (Apple Silicon) desktop app, auto-verify build — unsigned, right-click → Open on first launch |
 | `Lokal-11.1.6-arm64-mac.zip` | same app as a zip |
 | `Lokal-Remote-1.0-debug.apk` | Android remote shell — sideload, then connect to `http://<your-computer>:3421/remote` |
+| `Lokal-Mobile-1.4.2-autoverify.apk` | the full Android Lokal app with auto-verify — see [android-build/](android-build/) |
 
 ## What changed vs upstream
 

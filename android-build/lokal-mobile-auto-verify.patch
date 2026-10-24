@@ -1,0 +1,301 @@
+From 7443118b165f86e186713cac9892063358e6c114 Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 17:10:13 +0530
+Subject: [PATCH] Mornye auto-verify: re-verify lapsed signed sessions on the
+ phone
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ported from desktop's electron/mornye/autoVerify.js: 12s after launch and
+every 30 minutes, signed-session addons whose session existed and lapsed are
+re-verified the same way the Verify button does — silently when the gateway
+clears it, opening the auth sheet when it needs the person. First-time setup,
+disabled addons, missing required settings and intentional logouts are left
+alone. Tests in test/morneye/morneye_auto_verify_test.dart.
+---
+ lib/features/morneye/morneye_auto_verify.dart |  88 ++++++++++++
+ lib/features/morneye/morneye_packages.dart    |  14 ++
+ lib/main.dart                                 |   6 +
+ test/morneye/morneye_auto_verify_test.dart    | 125 ++++++++++++++++++
+ 4 files changed, 233 insertions(+)
+ create mode 100644 lib/features/morneye/morneye_auto_verify.dart
+ create mode 100644 test/morneye/morneye_auto_verify_test.dart
+
+diff --git a/lib/features/morneye/morneye_auto_verify.dart b/lib/features/morneye/morneye_auto_verify.dart
+new file mode 100644
+index 0000000..fdcad10
+--- /dev/null
++++ b/lib/features/morneye/morneye_auto_verify.dart
+@@ -0,0 +1,88 @@
++import 'dart:async';
++
++import 'package:flutter/foundation.dart';
++import 'package:flutter/material.dart';
++
++import '../../core/navigation/root_navigator.dart';
++import 'morneye_auth_sheet.dart';
++import 'morneye_packages.dart';
++
++/// Signed-session add-ons (Tidal, Qobuz, Deezer, Amazon…) lose their gateway
++/// session while the app is closed, and the next search or play then stops
++/// with a "verify" prompt. This pass re-verifies them on its own — at start-up
++/// and on a slow cycle — the same way the Verify button does: a challenge
++/// that clears without interaction finishes invisibly (the auth sheet's
++/// WebView keeps its cookies), and one that needs the person opens the same
++/// sheet a tap would have. Add-ons never set up, add-ons with required
++/// settings missing, and add-ons disconnected on purpose are left alone:
++/// only a session that existed and has lapsed is worth re-asking the gateway
++/// for. Ported from desktop's electron/mornye/autoVerify.js.
++
++const morneyeAutoVerifyFirstDelay = Duration(seconds: 12);
++const morneyeAutoVerifyCycle = Duration(minutes: 30);
++
++bool _running = false;
++
++/// Whether the automatic pass should re-verify [addon] now.
++bool morneyeNeedsAutoVerify(MorneyePackages packages, MorneyeAddon addon) {
++  if (!addon.enabled || addon.signedSession == null) return false;
++  final access = packages.access(addon);
++  if (access.verified || access.missing.isNotEmpty) return false;
++  return packages.hadSession(addon);
++}
++
++/// One pass over the installed add-ons, one at a time (the auth sheet is
++/// modal and sequential passes keep the gateway calm).
++Future<void> morneyeAutoVerifyPass(MorneyePackages packages) async {
++  if (_running) return;
++  _running = true;
++  try {
++    for (final addon in packages.addons) {
++      try {
++        if (!morneyeNeedsAutoVerify(packages, addon)) continue;
++        final url = await packages.verify(addon.key);
++        if (url == null || url.isEmpty) continue;
++        final context = rootNavigatorKey.currentContext;
++        if (context == null || !context.mounted) continue;
++        debugPrint('[Morneye] Auto-verifying ${addon.displayName}…');
++        final verified = await MorneyeAuthSheet.show(
++          context,
++          packages: packages,
++          addon: addon,
++          url: url,
++        );
++        debugPrint(
++          '[Morneye] Auto-verify of ${addon.displayName}: '
++          '${verified ? 'verified' : 'not completed'}',
++        );
++      } catch (error) {
++        debugPrint('[Morneye] Auto-verify of ${addon.key} failed: $error');
++      }
++    }
++  } finally {
++    _running = false;
++  }
++}
++
++/// Starts the automatic passes: once shortly after launch (after repositories
++/// have had time to refresh), then on a slow keep-alive cycle.
++void morneyeStartAutoVerify(
++  Future<MorneyePackages> packages, {
++  Duration firstDelay = morneyeAutoVerifyFirstDelay,
++  Duration cycle = morneyeAutoVerifyCycle,
++}) {
++  Timer(firstDelay, () async {
++    try {
++      await morneyeAutoVerifyPass(await packages);
++    } catch (error) {
++      debugPrint('[Morneye] Auto-verify pass failed: $error');
++    }
++    Timer.periodic(cycle, (_) async {
++      try {
++        await morneyeAutoVerifyPass(await packages);
++      } catch (error) {
++        debugPrint('[Morneye] Auto-verify pass failed: $error');
++      }
++    });
++  });
++}
+diff --git a/lib/features/morneye/morneye_packages.dart b/lib/features/morneye/morneye_packages.dart
+index 168f352..9fc1b2a 100644
+--- a/lib/features/morneye/morneye_packages.dart
++++ b/lib/features/morneye/morneye_packages.dart
+@@ -812,6 +812,20 @@ class MorneyePackages {
+     );
+   }
+ 
++  /// Whether a signed-session add-on was verified before and has since
++  /// lapsed: a saved session id, not just the install id that gets written
++  /// as soon as the add-on is listed. The auto-verify pass opens its sheet
++  /// only in this case — never for first-time setup or after Disconnect.
++  bool hadSession(MorneyeAddon addon) {
++    if (addon.signedSession == null) return false;
++    try {
++      return '${_sessionFor(addon, null).status()['session_id'] ?? ''}'
++          .isNotEmpty;
++    } catch (_) {
++      return false;
++    }
++  }
++
+   // ------------------------------------------------------------ repositories
+ 
+   Future<Uint8List> _document(String url, int maxBytes) async {
+diff --git a/lib/main.dart b/lib/main.dart
+index c99b7fa..cce44d0 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -8,6 +8,8 @@ import 'package:flick/widgets/lokal/lokal_glass.dart';
+ import 'package:flick/src/rust/frb_generated.dart';
+ import 'package:flick/app/app.dart';
+ import 'package:flick/data/database.dart';
++import 'package:flick/features/morneye/morneye_auto_verify.dart';
++import 'package:flick/features/morneye/morneye_service.dart';
+ import 'package:flick/services/app_preferences_service.dart';
+ import 'package:flick/services/display_mode_service.dart';
+ import 'package:flick/services/external_playback_service.dart';
+@@ -131,6 +133,10 @@ Future<void> _bootstrapAppAfterFirstFrame() async {
+       (Object e) => devLog('Playback cache maintenance failed: $e'),
+     ),
+   );
++  // Signed-session add-ons that have lapsed are re-verified on their own,
++  // the same way the Verify button does, instead of stopping a search or a
++  // play to ask.
++  morneyeStartAutoVerify(MorneyeService.instance.packages);
+ }
+ 
+ Future<void> _requestNotificationPermission() async {
+diff --git a/test/morneye/morneye_auto_verify_test.dart b/test/morneye/morneye_auto_verify_test.dart
+new file mode 100644
+index 0000000..bbe33b5
+--- /dev/null
++++ b/test/morneye/morneye_auto_verify_test.dart
+@@ -0,0 +1,125 @@
++import 'dart:io';
++
++import 'package:flick/features/morneye/morneye_auto_verify.dart';
++import 'package:flick/features/morneye/morneye_packages.dart';
++import 'package:flick/features/morneye/morneye_session.dart';
++import 'package:flick/features/morneye/morneye_storage.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import 'morneye_fakes.dart';
++
++/// The automatic pass must open its sheet only for a signed-session add-on
++/// whose session existed and has lapsed: never for first-time setup, a
++/// healthy session, a turned-off add-on, missing required settings, or one
++/// disconnected on purpose. Mirrors desktop's mornye-auto-verify tests.
++void main() {
++  late Directory dir;
++  late MorneyeStorage storage;
++  late MorneyePackages packages;
++
++  final manifest = <String, Object?>{
++    'displayName': 'Tidal',
++    'signedSession': {'baseUrl': 'https://gw.example'},
++  };
++
++  MorneyeAddon addon({bool enabled = true}) => MorneyeAddon(
++        key: 'tidal-web',
++        name: 'tidal-web',
++        manifest: manifest,
++        digest: 'd1',
++        installedAt: 0,
++        methods: const [],
++        enabled: enabled,
++      );
++
++  Future<void> seedSession({
++    required bool lapsed,
++    bool authenticated = false,
++  }) async {
++    final config = (manifest['signedSession'] as Map).cast<String, Object?>();
++    final session = MorneyeSignedSession(config, storage, null, 'tidal-web');
++    final record = session.record();
++    if (lapsed || authenticated) {
++      storage.write(session.namespace, 'session', {
++        ...record,
++        'session_id': 'sid',
++        'session_secret': 'sec',
++        'expires_at': authenticated
++            ? DateTime.now()
++                .add(const Duration(hours: 1))
++                .toIso8601String()
++            : DateTime.now()
++                .subtract(const Duration(hours: 1))
++                .toIso8601String(),
++      });
++    }
++  }
++
++  setUp(() async {
++    dir = await Directory.systemTemp.createTemp('morneye-auto-verify');
++    storage = MorneyeStorage(dir, sealer: FakeNative(), vault: MemoryVault());
++    await storage.open();
++    packages = MorneyePackages(dir, storage: storage);
++  });
++
++  tearDown(() async {
++    if (dir.existsSync()) await dir.delete(recursive: true);
++  });
++
++  test('a lapsed session is the one case that re-verifies on its own', () async {
++    await seedSession(lapsed: true);
++    expect(morneyeNeedsAutoVerify(packages, addon()), isTrue);
++  });
++
++  test('a healthy session is left alone', () async {
++    await seedSession(lapsed: false, authenticated: true);
++    expect(morneyeNeedsAutoVerify(packages, addon()), isFalse);
++  });
++
++  test('first-time setup never opens the sheet by itself', () async {
++    await seedSession(lapsed: false, authenticated: false);
++    expect(morneyeNeedsAutoVerify(packages, addon()), isFalse);
++  });
++
++  test('a disconnected add-on (session cleared) is not re-verified', () async {
++    await seedSession(lapsed: true);
++    final config = (manifest['signedSession'] as Map).cast<String, Object?>();
++    MorneyeSignedSession(config, storage, null, 'tidal-web').clear();
++    expect(morneyeNeedsAutoVerify(packages, addon()), isFalse);
++  });
++
++  test('a turned-off add-on is skipped', () async {
++    await seedSession(lapsed: true);
++    expect(morneyeNeedsAutoVerify(packages, addon(enabled: false)), isFalse);
++  });
++
++  test('missing required settings or no signed session is out of scope', () async {
++    await seedSession(lapsed: true);
++    final tokenAddon = MorneyeAddon(
++      key: 'token-addon',
++      name: 'token-addon',
++      manifest: {
++        'displayName': 'Token',
++        'settings': [
++          {'key': 'token', 'label': 'Token', 'required': true, 'type': 'text'},
++        ],
++        'signedSession': {'baseUrl': 'https://gw.example'},
++      },
++      digest: 'd2',
++      installedAt: 0,
++      methods: const [],
++    );
++    expect(packages.access(tokenAddon).missing, isNotEmpty);
++    expect(morneyeNeedsAutoVerify(packages, tokenAddon), isFalse);
++
++    final plainAddon = MorneyeAddon(
++      key: 'plain',
++      name: 'plain',
++      manifest: {'displayName': 'Plain'},
++      digest: 'd3',
++      installedAt: 0,
++      methods: const [],
++    );
++    expect(morneyeNeedsAutoVerify(packages, plainAddon), isFalse);
++  });
++}
+-- 
+2.54.0 (Apple Git-157)
+
