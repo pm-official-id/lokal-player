@@ -1,0 +1,58 @@
+From 593db2149030f07193f5263399784f298b900142 Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 17:34:20 +0530
+Subject: [PATCH] Build option: LOKAL_ABIS for single-ABI APKs
+
+The default universal package carries four ABIs (150 MB). Setting
+LOKAL_ABIS=arm64-v8a (with --target-platform android-arm64) limits ndk
+abiFilters, the copyNdkLibs staging and jniLibs packaging to the built ABI:
+59 MB, arm64-only. Unset, the build is unchanged.
+---
+ android/app/build.gradle.kts | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index ea3800f..2fe67a9 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -88,7 +88,10 @@ android {
+         versionName = flutter.versionName
+ 
+         ndk {
+-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
++            // LOKAL_ABIS=arm64-v8a builds a single-ABI APK (~half the size of
++            // the universal default); unset, all four ABIs ship as before.
++            val abis = System.getenv("LOKAL_ABIS")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
++            abiFilters += (abis ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86"))
+         }
+ 
+         externalNativeBuild {
+@@ -102,6 +105,14 @@ android {
+         jniLibs {
+             useLegacyPackaging = true
+             pickFirsts += listOf("**/libc++_shared.so", "**/libdiscord_partner_sdk.so")
++            // LOKAL_ABIS=arm64-v8a: leave the ABIs not built for out of the
++            // package (copyNdkLibs and Flutter's default platforms put them in).
++            val buildAbis = System.getenv("LOKAL_ABIS")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
++            if (buildAbis != null) {
++                for (abi in listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")) {
++                    if (abi !in buildAbis) excludes += "lib/$abi/**"
++                }
++            }
+         }
+     }
+ 
+@@ -203,7 +214,10 @@ tasks.register("copyNdkLibs") {
+             "toolchains/llvm/prebuilt/darwin-arm64",
+         )
+ 
++        // LOKAL_ABIS=arm64-v8a: only stage the NDK runtime for built ABIs.
++        val buildAbis = System.getenv("LOKAL_ABIS")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+         abiToArch.forEach { (abi, arch) ->
++            if (buildAbis != null && abi !in buildAbis) return@forEach
+             val abiOutDir = File(jniLibsDir, abi)
+             abiOutDir.mkdirs()
+ 
+-- 
+2.54.0 (Apple Git-157)
+
