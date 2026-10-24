@@ -1,0 +1,532 @@
+From b060eb65a519aebcb1b783e4b7b6c8002b045e8c Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 17:53:33 +0530
+Subject: [PATCH] Backup & restore: settings, playlists, logins; not downloads
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Settings → Data → Backup. One .lokalbak zip holds the app preferences
+(settings and playlists), the Mornye tree with its master key (add-on
+logins, credentials and sessions), and a consistent snapshot of the Isar
+library database. Downloaded music is never part of a backup.
+
+Restore replaces all of the above and closes the app; opening it again
+continues from the backup. Prefs round-trip with their types; a vault-less
+backup restores on fresh installs; garbage and future-format files are
+refused. Round-trip tests in test/services/backup_service_test.dart.
+---
+ .../settings/lokal/groups/data_group.dart     |  88 ++++++
+ lib/services/backup_service.dart              | 298 ++++++++++++++++++
+ test/services/backup_service_test.dart        |  90 ++++++
+ 3 files changed, 476 insertions(+)
+ create mode 100644 lib/services/backup_service.dart
+ create mode 100644 test/services/backup_service_test.dart
+
+diff --git a/lib/features/settings/lokal/groups/data_group.dart b/lib/features/settings/lokal/groups/data_group.dart
+index 04acc82..d5561f9 100644
+--- a/lib/features/settings/lokal/groups/data_group.dart
++++ b/lib/features/settings/lokal/groups/data_group.dart
+@@ -1,4 +1,7 @@
++import 'package:file_picker/file_picker.dart';
++import 'package:flutter/services.dart';
+ import 'package:flick/features/settings/widgets/battery_optimization_setting.dart';
++import 'package:flick/services/backup_service.dart';
+ import 'package:flick/features/settings/library_scan/library_scan_flow.dart';
+ import 'package:flick/providers/library_scan_preferences_provider.dart';
+ import 'package:flick/services/scan_session_controller.dart';
+@@ -251,6 +254,91 @@ List<LokalSettingsSection> dataSettings(
+       const _CacheLimit(),
+     ],
+   ),
++  LokalSettingsSection(
++    title: lokalText('Backup'),
++    children: [
++      LokalSettingRow(
++        icon: Icons.backup_rounded,
++        label: lokalText('Back up settings and logins'),
++        description: lokalText(
++          'Saves your settings, playlists, account logins and add-on access to one file. Downloaded music is not included.',
++        ),
++        trailing: LokalSettingButton(
++          label: lokalText('Back up'),
++          onPressed: () async {
++            try {
++              final data = await createLokalBackup();
++              final stamp = DateTime.now();
++              final name =
++                  'lokal-backup-'
++                  '${stamp.year}${stamp.month.toString().padLeft(2, '0')}${stamp.day.toString().padLeft(2, '0')}'
++                  '-${stamp.hour.toString().padLeft(2, '0')}${stamp.minute.toString().padLeft(2, '0')}'
++                  '.lokalbak';
++              final savedUri = await FilePicker.saveFile(
++                fileName: name,
++                bytes: data,
++              );
++              if (savedUri == null) return;
++              if (context.mounted) {
++                _say(context, lokalText('Backup saved.'));
++              }
++            } catch (error) {
++              if (context.mounted) {
++                _say(context, lokalText('Backup failed ({arg0}).', args: {'arg0': '$error'}));
++              }
++            }
++          },
++        ),
++      ),
++      LokalSettingRow(
++        icon: Icons.restore_rounded,
++        label: lokalText('Restore from a backup'),
++        description: lokalText(
++          'Replaces settings, playlists, logins and the library with the backup’s contents. The app restarts afterwards.',
++        ),
++        trailing: LokalSettingButton(
++          label: lokalText('Restore'),
++          destructive: true,
++          onPressed: () async {
++            final ok = await _confirm(
++              context,
++              title: lokalText('Restore from a backup?'),
++              message: lokalText(
++                'Your current settings, playlists, logins and library are replaced by the backup’s contents. Downloaded music is not touched.',
++              ),
++              action: lokalText('Restore'),
++              destructive: true,
++            );
++            if (!ok || !context.mounted) return;
++            try {
++              final picked = await FilePicker.pickFile(
++                type: FileType.any,
++              );
++              final bytes = await picked?.readAsBytes();
++              if (bytes == null || bytes.isEmpty) return;
++              await restoreLokalBackup(bytes);
++              if (!context.mounted) return;
++              await showLokalConfirmSheet(
++                context: context,
++                title: lokalText('Backup restored'),
++                message: lokalText(
++                  'Open the app again to continue with the restored settings, playlists and logins.',
++                ),
++                confirmLabel: lokalText('Close app'),
++              );
++              await SystemNavigator.pop();
++            } on LokalBackupException catch (error) {
++              if (context.mounted) _say(context, lokalText('$error'));
++            } catch (error) {
++              if (context.mounted) {
++                _say(context, lokalText('Restore failed ({arg0}).', args: {'arg0': '$error'}));
++              }
++            }
++          },
++        ),
++      ),
++    ],
++  ),
+   LokalSettingsSection(
+     title: lokalText('Danger zone'),
+     children: [
+diff --git a/lib/services/backup_service.dart b/lib/services/backup_service.dart
+new file mode 100644
+index 0000000..055570a
+--- /dev/null
++++ b/lib/services/backup_service.dart
+@@ -0,0 +1,298 @@
++import 'dart:convert';
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'package:archive/archive.dart';
++import 'package:flick/data/database.dart';
++import 'package:flick/features/morneye/morneye_storage.dart';
++import 'package:path_provider/path_provider.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++/// Backs up everything but the music: settings and playlists (the app's
++/// preferences, playlists included), account logins (the Mornye master key
++/// plus its encrypted add-on credentials and sessions), and the library
++/// database (playlists' songs, artists, history). Downloaded audio files are
++/// never part of a backup — they stay wherever they were saved.
++///
++/// The file is a zip: manifest.json, prefs.json, vault.b64, the mornye/
++/// tree and the Isar database file. Restoring replaces all of the above and
++/// needs an app restart to take hold.
++
++const lokalBackupFormat = 'lokal-mobile-backup';
++const lokalBackupVersion = 1;
++
++class LokalBackupException implements Exception {
++  LokalBackupException(this.message);
++  final String message;
++  @override
++  String toString() => message;
++}
++
++class LokalBackupBundle {
++  LokalBackupBundle({
++    required this.createdAt,
++    required this.appVersion,
++    required this.prefs,
++    this.vaultKey,
++    required this.mornyeFiles,
++    required this.isarDatabase,
++  });
++
++  final DateTime createdAt;
++  final String appVersion;
++  /// Preferences as {"key": {"t": s|i|b|d|l, "v": value}} — types survive.
++  final Map<String, Object?> prefs;
++  final Uint8List? vaultKey;
++  /// Relative path under the mornye/ root → file bytes.
++  final Map<String, Uint8List> mornyeFiles;
++  final Uint8List isarDatabase;
++}
++
++// --------------------------------------------------------------- pure core
++
++Uint8List buildLokalBackupBundle({
++  required DateTime createdAt,
++  required String appVersion,
++  required Map<String, Object?> prefs,
++  Uint8List? vaultKey,
++  required Map<String, List<int>> mornyeFiles,
++  required List<int> isarDatabase,
++}) {
++  final encodedPrefs = <String, Object?>{
++    for (final entry in prefs.entries)
++      entry.key: {'t': _prefType(entry.value), 'v': entry.value},
++  };
++  final archive = Archive()
++    ..add(
++      ArchiveFile.string(
++        'manifest.json',
++        jsonEncode({
++          'format': lokalBackupFormat,
++          'version': lokalBackupVersion,
++          'created_at': createdAt.toIso8601String(),
++          'app_version': appVersion,
++        }),
++      ),
++    )
++    ..add(ArchiveFile.string('prefs.json', jsonEncode(encodedPrefs)))
++    ..add(
++      ArchiveFile(
++        'isar/flick_player.isar',
++        isarDatabase.length,
++        Uint8List.fromList(isarDatabase),
++      ),
++    );
++  if (vaultKey != null) {
++    archive.add(
++      ArchiveFile.string(
++        'vault.b64',
++        base64.encode(vaultKey.toList(growable: false)),
++      ),
++    );
++  }
++  mornyeFiles.forEach((path, bytes) {
++    archive.add(
++      ArchiveFile(
++        'mornye/$path',
++        bytes.length,
++        Uint8List.fromList(bytes),
++      ),
++    );
++  });
++  final output = ZipEncoder().encode(archive);
++  return output is Uint8List ? output : Uint8List.fromList(output);
++}
++
++LokalBackupBundle readLokalBackupBundle(List<int> bytes) {
++  Archive archive;
++  try {
++    archive = ZipDecoder().decodeBytes(bytes);
++  } catch (_) {
++    throw LokalBackupException('That file is not a Lokal backup.');
++  }
++  // Archive 4's content getter always yields bytes.
++  String? text(String name) {
++    final entry = archive.findFile(name);
++    return entry == null ? null : utf8.decode(entry.content);
++  }
++
++  final manifest = text('manifest.json');
++  Map<String, Object?> manifestMap;
++  try {
++    manifestMap =
++        manifest != null
++            ? jsonDecode(manifest) as Map<String, Object?>
++            : throw const FormatException();
++  } catch (_) {
++    throw LokalBackupException('That file is not a Lokal backup.');
++  }
++  if (manifestMap['format'] != lokalBackupFormat) {
++    throw LokalBackupException('That file is not a Lokal backup.');
++  }
++  final version = manifestMap['version'];
++  if (version is! int || version > lokalBackupVersion) {
++    throw LokalBackupException(
++      'That backup was made by a newer version of the app.',
++    );
++  }
++
++  Map<String, Object?> prefs = {};
++  final prefsFile = text('prefs.json');
++  if (prefsFile != null) {
++    final decoded = jsonDecode(prefsFile);
++    if (decoded is Map<String, Object?>) prefs = decoded;
++  }
++
++  Uint8List? vaultKey;
++  final vaultFile = text('vault.b64');
++  if (vaultFile != null && vaultFile.trim().isNotEmpty) {
++    try {
++      vaultKey = base64.decode(vaultFile.trim());
++    } on FormatException {
++      vaultKey = null;
++    }
++  }
++
++  final mornyeFiles = <String, Uint8List>{};
++  for (final entry in archive) {
++    if (!entry.isFile || !entry.name.startsWith('mornye/')) continue;
++    final relative = entry.name.substring('mornye/'.length);
++    if (relative.isEmpty || relative.contains('..')) continue;
++    mornyeFiles[relative] = entry.content;
++  }
++
++  final dbEntry = archive.findFile('isar/flick_player.isar');
++  if (dbEntry == null) {
++    throw LokalBackupException('That backup has no library database in it.');
++  }
++
++  return LokalBackupBundle(
++    createdAt:
++        DateTime.tryParse('${manifestMap['created_at'] ?? ''}') ??
++        DateTime.fromMillisecondsSinceEpoch(0),
++    appVersion: '${manifestMap['app_version'] ?? ''}',
++    prefs: prefs,
++    vaultKey: vaultKey,
++    mornyeFiles: mornyeFiles,
++    isarDatabase: dbEntry.content,
++  );
++}
++
++String _prefType(Object? value) {
++  if (value is bool) return 'b';
++  if (value is int) return 'i';
++  if (value is double) return 'd';
++  if (value is List) return 'l';
++  return 's';
++}
++
++// ------------------------------------------------------------ platform I/O
++
++/// Reads every preference. PlaylistService keeps playlists in here too.
++Future<Map<String, Object?>> _currentPrefs() async {
++  final prefs = await SharedPreferences.getInstance();
++  return {
++    for (final key in prefs.getKeys()) key: prefs.get(key),
++  };
++}
++
++Map<String, Uint8List> _readTree(Directory root) {
++  final files = <String, Uint8List>{};
++  if (!root.existsSync()) return files;
++  for (final entity in root.listSync(recursive: true, followLinks: false)) {
++    if (entity is! File) continue;
++    if (entity.path.endsWith('.lock') || entity.path.endsWith('.tmp')) continue;
++    files[entity.path.substring(root.path.length + 1)] =
++        entity.readAsBytesSync();
++  }
++  return files;
++}
++
++/// Builds a backup of settings, playlists, logins and the library database.
++Future<Uint8List> createLokalBackup({String appVersion = ''}) async {
++  final support = await getApplicationSupportDirectory();
++  final documents = await getApplicationDocumentsDirectory();
++
++  // A consistent snapshot of the open database, rather than copying its
++  // file underneath a transaction.
++  final snapshot = File(
++    '${documents.path}/backup-snapshot-${DateTime.now().millisecondsSinceEpoch}.tmp',
++  );
++  try {
++    await Database.instance.copyToFile(snapshot.path);
++    final db = await snapshot.readAsBytes();
++
++    return buildLokalBackupBundle(
++      createdAt: DateTime.now(),
++      appVersion: appVersion,
++      prefs: await _currentPrefs(),
++      vaultKey: await SecureMorneyeKeyVault().read(),
++      mornyeFiles: _readTree(Directory('${support.path}/mornye')),
++      isarDatabase: db,
++    );
++  } finally {
++    if (snapshot.existsSync()) snapshot.deleteSync();
++  }
++}
++
++/// Replaces preferences, the Mornye tree (add-ons, logins, sessions), the
++/// vault key and the library database. The app must restart afterwards.
++Future<void> restoreLokalBackup(Uint8List bytes) async {
++  final bundle = readLokalBackupBundle(bytes);
++  final support = await getApplicationSupportDirectory();
++  final documents = await getApplicationDocumentsDirectory();
++
++  // Logins first: the vault key must be in place for the restored encrypted
++  // records to stay readable.
++  if (bundle.vaultKey != null) {
++    final vault = SecureMorneyeKeyVault();
++    await vault.delete();
++    await vault.write(bundle.vaultKey!);
++  }
++
++  final root = Directory('${support.path}/mornye');
++  if (root.existsSync()) root.deleteSync(recursive: true);
++  bundle.mornyeFiles.forEach((relative, content) {
++    final file = File('${root.path}/$relative');
++    file.parent.createSync(recursive: true);
++    file.writeAsBytesSync(content, flush: true);
++  });
++
++  final prefs = await SharedPreferences.getInstance();
++  await prefs.clear();
++  for (final entry in bundle.prefs.entries) {
++    final record = entry.value;
++    if (record is! Map) continue;
++    final type = '${record['t']}';
++    final value = record['v'];
++    try {
++      switch (type) {
++        case 'b':
++          await prefs.setBool(entry.key, value == true);
++        case 'i':
++          await prefs.setInt(entry.key, value is int ? value : int.tryParse('$value') ?? 0);
++        case 'd':
++          await prefs.setDouble(entry.key, value is num ? value.toDouble() : 0);
++        case 'l':
++          await prefs.setStringList(
++            entry.key,
++            value is List ? value.map((e) => '$e').toList() : const <String>[],
++          );
++        default:
++          await prefs.setString(entry.key, '$value');
++      }
++    } catch (_) {
++      // One unreadable preference must not abort the whole restore.
++    }
++  }
++
++  await Database.close();
++  for (final suffix in ['.isar', '.isar.lock']) {
++    final file = File('${documents.path}/flick_player$suffix');
++    if (file.existsSync()) file.deleteSync();
++  }
++  File('${documents.path}/flick_player.isar').writeAsBytesSync(
++    bundle.isarDatabase,
++    flush: true,
++  );
++}
+diff --git a/test/services/backup_service_test.dart b/test/services/backup_service_test.dart
+new file mode 100644
+index 0000000..013a7eb
+--- /dev/null
++++ b/test/services/backup_service_test.dart
+@@ -0,0 +1,90 @@
++import 'dart:convert';
++import 'dart:typed_data';
++
++import 'package:archive/archive.dart';
++
++import 'package:flick/services/backup_service.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++void main() {
++  final prefs = <String, Object?>{
++    'playlists': '[{"id":"p1","name":"Road trip"}]',
++    'crossfadeEnabled': true,
++    'crossfadeDurationSecs': 4,
++    'artworkScale': 1.5,
++    'recentSearches': <String>['neon', 'dusk'],
++  };
++
++  Uint8List build() => buildLokalBackupBundle(
++        createdAt: DateTime.utc(2026, 10, 24, 12, 0),
++        appVersion: '1.4.2',
++        prefs: prefs,
++        vaultKey: Uint8List.fromList(List.generate(32, (i) => i)),
++        mornyeFiles: {
++          'packages/tidal-web/manifest.json': Uint8List.fromList([1, 2, 3]),
++          'data/a1b2c3/session.json': Uint8List.fromList([4, 5]),
++        },
++        isarDatabase: List.generate(64, (i) => i % 7),
++      );
++
++  test('a backup round-trips: settings, logins, database', () {
++    final bundle = readLokalBackupBundle(build());
++
++    expect(bundle.appVersion, '1.4.2');
++    expect(bundle.prefs['playlists'], {
++      't': 's',
++      'v': '[{"id":"p1","name":"Road trip"}]',
++    });
++    expect(bundle.prefs['crossfadeEnabled'], {'t': 'b', 'v': true});
++    expect(bundle.prefs['crossfadeDurationSecs'], {'t': 'i', 'v': 4});
++    expect(bundle.prefs['artworkScale'], {'t': 'd', 'v': 1.5});
++    expect(bundle.prefs['recentSearches'], {
++      't': 'l',
++      'v': ['neon', 'dusk'],
++    });
++    expect(bundle.vaultKey, Uint8List.fromList(List.generate(32, (i) => i)));
++    expect(bundle.mornyeFiles.keys, containsAll(<String>[
++      'packages/tidal-web/manifest.json',
++      'data/a1b2c3/session.json',
++    ]));
++    expect(bundle.mornyeFiles['data/a1b2c3/session.json'], [4, 5]);
++    expect(bundle.isarDatabase, List.generate(64, (i) => i % 7));
++  });
++
++  test('a backup without a vault key still reads (fresh installs)', () {
++    final bytes = buildLokalBackupBundle(
++      createdAt: DateTime.utc(2026, 10, 24),
++      appVersion: '1.4.2',
++      prefs: const {},
++      mornyeFiles: const {},
++      isarDatabase: const [9, 9],
++    );
++    expect(readLokalBackupBundle(bytes).vaultKey, isNull);
++  });
++
++  test('refuses files that are not Lokal backups', () {
++    expect(
++      () => readLokalBackupBundle([1, 2, 3, 4]),
++      throwsA(isA<LokalBackupException>()),
++    );
++  });
++
++  test('refuses backups from a newer backup format', () {
++    final old = ZipDecoder().decodeBytes(build());
++    final archive = Archive()
++      ..add(
++        ArchiveFile.string(
++          'manifest.json',
++          jsonEncode({'format': 'lokal-mobile-backup', 'version': 99}),
++        ),
++      );
++    for (final entry in old.where((e) => e.name != 'manifest.json')) {
++      archive.add(entry);
++    }
++    final future = ZipEncoder().encode(archive);
++    expect(
++      () => readLokalBackupBundle(future),
++      throwsA(isA<LokalBackupException>()),
++    );
++  });
++}
+-- 
+2.54.0 (Apple Git-157)
+
