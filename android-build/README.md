@@ -38,11 +38,26 @@ Verify with `shasum -a 256` against `SHA256SUMS` in this folder.
   android-arm64 --no-tree-shake-icons` (see the ABI patch below). Icon tree-shaking is off to
   keep the build reproducible on memory-tight machines; it costs ~3 MB.
 
+## LastWave skins build (this branch)
+
+The `lastwave-skins` branch adds the [LastWave](https://github.com/Clash-Projects/LastWave-native)
+player skins — its signature Electric-Lime (#C9FB00) on Deep-Obsidian-Teal (#012226) scheme in
+dark and light, plus its six accent presets (Crimson, Violet, Ocean, Sage, Amber, Rose) — and
+ships as a **separate app** so it installs alongside the original: applicationId
+`com.lokalkonnekt.konnekted2.skins`, label **“Lokal Skins”**, lime LastWave launcher sticker.
+Both apps can run side by side on one phone.
+
+Download: [Lokal-Skins-1.4.2-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-skins1/Lokal-Skins-1.4.2-arm64.apk)
+(63 MB, arm64) from the [mobile-v1.4.2-skins1](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-skins1) release on this branch.
+
+Everything below (auto-verify + backup & restore) is included in the skins build too.
+
 ## In this folder
 
 | File | What |
 |---|---|
 | `lokal-mobile-auto-verify.patch` | the auto-verify feature as a single commit (`git am`) — adds `lib/features/morneye/morneye_auto_verify.dart`, `hadSession()` in `morneye_packages.dart`, the start-up hook in `lib/main.dart`, and `test/morneye/morneye_auto_verify_test.dart` |
 | `lokal-mobile-backup-restore.patch` | the backup & restore feature as a single commit (`git am`): `lib/services/backup_service.dart`, a Backup section in the settings Data group, and round-trip tests |
+| `lokal-mobile-lastwave-skins.patch` | **skins branch only**: the LastWave skins + the standalone Lokal Skins identity (own app id, label, launcher stickers), as one commit |
 | `lokal-mobile-abi-override.patch` | optional build patch: a `LOKAL_ABIS` environment variable that limits `ndk abiFilters`, the `copyNdkLibs` staging and `jniLibs` packaging to the built ABI (59 MB arm64 vs 150 MB universal); unset, the build is unchanged |
 | `SHA256SUMS` | checksums of the release APKs |
