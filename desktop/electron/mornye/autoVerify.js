@@ -45,9 +45,11 @@ function announce(key, status) {
 }
 
 /** One pass over the installed addons. One addon at a time: verifyAndWait
- *  waits for a window to close, and staggering them keeps the gateway calm. */
+ *  waits for a window to close, and staggering them keeps the gateway calm.
+ *  Outside Electron (the plain web server) verification windows cannot open,
+ *  but silent session renewals still work and are worth doing. */
 async function verifyOnce(db) {
-  if (running || !process.versions.electron) return
+  if (running) return
   running = true
   try {
     const packages = service(db)

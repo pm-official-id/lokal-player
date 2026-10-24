@@ -32,6 +32,7 @@ Minimal Kotlin + Compose app (`dev.lokal.remote`):
 - Setup screen: enter the computer's `address:port` (default port 3421), saved for next launch.
 - Full-screen WebView with the Lokal Remote UI; back button navigates; if the computer is unreachable it returns to setup with the error.
 - Lokal's icon as the launcher icon; dark theme to match.
+- **Auto-verify from the phone**: 3 seconds after connecting (and every 15 minutes while open), the app calls `POST /api/addons/verify` on the desktop, which runs the Mornye auto-verify pass immediately instead of waiting for the desktop's next 30-minute tick. Silent — the desktop does the verifying and opens its own window if a source needs attention. The endpoint follows the same guard as the remote-control routes (paired link device or `REMOTE_TOKEN`; open when neither is configured).
 
 Build it: `cd android && ./gradlew assembleDebug` (or open in Android Studio). APK output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 

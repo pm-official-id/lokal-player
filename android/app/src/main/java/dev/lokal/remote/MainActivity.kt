@@ -3,6 +3,9 @@ package dev.lokal.remote
 import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.ViewGroup
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -25,6 +28,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +42,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,6 +99,21 @@ fun RemoteApp(savedServer: String, onSave: (String) -> Unit) {
             val view = webView
             if (view != null && view.canGoBack()) view.goBack() else connectedTo = ""
         }
+        // Auto-verify from the phone: ask the desktop to run its verification
+        // pass as soon as we connect (not at its next 30-minute tick), then
+        // keep nudging it while the app stays open. Silent — the desktop does
+        // the verifying and opens its own window if a source needs attention.
+        DisposableEffect(connectedTo) {
+            val handler = Handler(Looper.getMainLooper())
+            val ping = object : Runnable {
+                override fun run() {
+                    triggerAutoVerify(connectedTo)
+                    handler.postDelayed(this, AUTO_VERIFY_INTERVAL_MS)
+                }
+            }
+            handler.postDelayed(ping, AUTO_VERIFY_FIRST_DELAY_MS)
+            onDispose { handler.removeCallbacks(ping) }
+        }
         Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B0B0B)) {
             AndroidView(
                 modifier = Modifier
@@ -136,6 +158,33 @@ private fun WebView.configureForRemote() {
     settings.domStorageEnabled = true
     settings.mediaPlaybackRequiresUserGesture = false
     settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+}
+
+private const val AUTO_VERIFY_FIRST_DELAY_MS = 3_000L
+private const val AUTO_VERIFY_INTERVAL_MS = 15 * 60_000L
+private const val TAG = "LokalAutoVerify"
+
+/** POST /api/addons/verify on the desktop, off the UI thread, result only logged. */
+private fun triggerAutoVerify(server: String) {
+    thread {
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL("http://$server/api/addons/verify").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 5_000
+                readTimeout = 30_000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+            connection.outputStream.use { it.write("{}".toByteArray()) }
+            val code = connection.responseCode
+            Log.i(TAG, "desktop auto-verify pass: HTTP $code")
+        } catch (e: Exception) {
+            Log.w(TAG, "desktop auto-verify ping failed: ${e.message}")
+        } finally {
+            connection?.disconnect()
+        }
+    }
 }
 
 @Composable
