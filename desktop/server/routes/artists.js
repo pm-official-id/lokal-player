@@ -1,0 +1,238 @@
+const router = require('express').Router()
+const fs = require('fs-extra')
+const path = require('path')
+const { getDB } = require('../../electron/ipc/db')
+const { findArtistById, trackArtistLinks } = require('../../electron/artistId')
+const artistRoles = require('../../electron/artistRoles')
+const { cacheArtistMetadata, refreshArtistMetadata, startRefreshAll, refreshAllStatus, cancelRefreshAll, searchArtistMetadataCandidates, applyArtistMetadataSelection, clearArtistImageOverride } = require('../../electron/ipc/artistMetadata')
+
+function classifyAlbumRow(row) {
+  const trackCount = Number(row?.release_track_count ?? row?.track_count ?? 0)
+  if (trackCount <= 1) return 'single'
+  if (trackCount <= 6) return 'ep'
+  return 'album'
+}
+
+function enrichAlbumRows(rows = []) {
+  return rows.map((row) => ({
+    ...row,
+    release_type: classifyAlbumRow(row),
+  }))
+}
+
+
+function addArtistFallback(db, artist) {
+  if (artist.image_path) return artist
+  const firstTrack = db.prepare(`
+    SELECT t.artwork_path FROM tracks t 
+    JOIN artist_track_links atl ON atl.track_id = t.id 
+    WHERE atl.artist_id = ? AND t.artwork_path IS NOT NULL 
+    ORDER BY t.play_count DESC LIMIT 1
+  `).get(artist.id)
+  return { ...artist, image_path: firstTrack?.artwork_path || null }
+}
+
+async function saveArtistImageFromData(artistId, imageData) {
+  const { getStorageDir } = require('../../electron/ipc/db')
+  const imgPath = path.join(getStorageDir(), 'artwork', `artist-${artistId}.jpg`)
+  const buf = Buffer.from(String(imageData || '').split(',')[1] || '', 'base64')
+  await fs.writeFile(imgPath, buf)
+  return imgPath
+}
+
+router.get('/', (req, res) => {
+  const db = getDB()
+  const search = typeof req.query.search === 'string' ? req.query.search.trim() : ''
+  const followedOnly = req.query.followed === '1'
+  const mainOnly = req.query.mainOnly === '1'
+  const hasPaging = !!search || followedOnly || mainOnly || req.query.limit !== undefined || req.query.offset !== undefined
+  const limit = hasPaging ? Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 60)) : null
+  const offset = hasPaging ? Math.max(0, parseInt(req.query.offset, 10) || 0) : 0
+  const sort = req.query.sort === 'tracks' ? 'tracks' : 'name'
+  const orderBy = sort === 'tracks' ? 'ORDER BY track_count DESC, a.name ASC' : 'ORDER BY a.name ASC'
+  const params = []
+  const conditions = []
+  const groupBy = 'GROUP BY a.id'
+  const having = 'HAVING COUNT(DISTINCT t.id) > 0'
+
+  if (search) {
+    conditions.push('a.name LIKE ?')
+    params.push('%' + search + '%')
+  }
+  if (followedOnly) {
+    const followed = require('../../electron/followedArtistIds').followedCondition(db)
+    conditions.push(followed.sql)
+    params.push(followed.param)
+  }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+  const baseSql = [
+    'FROM artists a',
+    'LEFT JOIN artist_track_links atl ON atl.artist_id = a.id',
+    "LEFT JOIN tracks t ON t.id = atl.track_id AND t.file_path NOT LIKE 'ghost://%'",
+  ].join('\n')
+  const selectSql = [
+    'SELECT a.*, COUNT(DISTINCT t.id) as track_count',
+    baseSql, where, groupBy, having, orderBy,
+  ].filter(Boolean).join('\n')
+
+  if (!hasPaging) {
+    const artists = db.prepare(selectSql).all(...params)
+    res.json(artists.map(artist => addArtistFallback(db, artist)))
+    return
+  }
+
+  let rows
+  let total
+  if (mainOnly) {
+    const mainIds = artistRoles.mainOnlyArtistIds(db)
+    const eligible = db.prepare(selectSql).all(...params).filter(artist => mainIds.has(String(artist.id)))
+    total = eligible.length
+    rows = eligible.slice(offset, offset + limit)
+  } else {
+    rows = db.prepare(selectSql + '\nLIMIT ? OFFSET ?').all(...params, limit, offset)
+    total = db.prepare([
+      'SELECT COUNT(*) as total FROM (',
+      'SELECT a.id', baseSql, where, groupBy, having,
+      ') grouped_artists',
+    ].filter(Boolean).join('\n')).get(...params)?.total || 0
+  }
+
+  res.json({
+    items: rows.map(artist => addArtistFallback(db, artist)),
+    total,
+    limit,
+    offset,
+    hasMore: offset + rows.length < total,
+  })
+})
+
+router.get('/metadata/search', async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+  const source = typeof req.query.source === 'string' ? req.query.source : 'either'
+  res.json(await searchArtistMetadataCandidates(q, { source }))
+})
+
+// Refresh every artist's bio and picture (background job; GET polls it).
+router.post('/refresh-all', (req, res) => res.json(startRefreshAll(getDB(), { source: req.body?.source })))
+router.get('/refresh-all', (req, res) => res.json(refreshAllStatus()))
+router.delete('/refresh-all', (req, res) => res.json(cancelRefreshAll()))
+
+router.get('/for-track/:trackId', (req, res) => res.json(trackArtistLinks(getDB(), req.params.trackId)))
+
+router.get('/:id', (req, res) => {
+  const db = getDB()
+  let artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  // By the artist's links, as on desktop: collaborations ("A x B") and
+  // features count for each artist, not only an exact artist tag.
+  const tracks = db.prepare("SELECT t.* FROM tracks t JOIN artist_track_links atl ON atl.track_id = t.id WHERE atl.artist_id = ? AND t.file_path NOT LIKE 'ghost://%' ORDER BY t.album, t.track_num, t.title").all(artist.id)
+  const topTracks = db.prepare("SELECT t.* FROM tracks t JOIN artist_track_links atl ON atl.track_id = t.id WHERE atl.artist_id = ? AND t.file_path NOT LIKE 'ghost://%' ORDER BY t.play_count DESC LIMIT 5").all(artist.id)
+  const albums = enrichAlbumRows(db.prepare(`
+    SELECT
+      t.album as title,
+      COALESCE(NULLIF(t.album_artist, ''), t.artist) as album_artist,
+      t.year,
+      t.artwork_path,
+      COUNT(*) as track_count,
+      (SELECT COUNT(*) FROM tracks full_release
+        WHERE LOWER(full_release.album) = LOWER(t.album)
+          AND LOWER(COALESCE(NULLIF(full_release.album_artist, ''), full_release.artist)) = LOWER(COALESCE(NULLIF(t.album_artist, ''), t.artist))
+          AND full_release.file_path NOT LIKE 'ghost://%') as release_track_count,
+      GROUP_CONCAT(DISTINCT t.artist) as artists
+    FROM tracks t
+    JOIN artist_track_links atl ON atl.track_id = t.id
+    WHERE atl.artist_id = ?
+      AND t.file_path NOT LIKE 'ghost://%'
+      AND t.album IS NOT NULL
+    GROUP BY LOWER(t.album), LOWER(COALESCE(NULLIF(t.album_artist, ''), t.artist))
+    ORDER BY t.year DESC, t.album ASC
+  `).all(artist.id)).map(album => ({ ...album, is_main_artist: artistRoles.isMainArtistRelease(artist.name, album, tracks, db) }))
+  const artistWithFallback = addArtistFallback(db, artist)
+  res.json({ ...artistWithFallback, tracks, topTracks, albums })
+})
+
+router.post('/:id/refresh-metadata', async (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  const force = req.body?.force === true
+  if (!force) {
+    const enabled = db.prepare("SELECT value FROM settings WHERE key = 'auto_fetch_artist_metadata'").get()?.value === '1'
+    if (!enabled) return res.json(addArtistFallback(db, artist))
+  }
+  if (req.body?.overwrite === true) {
+    await refreshArtistMetadata(db, artist, { source: req.body?.source })
+    return res.json(addArtistFallback(db, findArtistById(db, req.params.id) || artist))
+  }
+  const refreshed = await cacheArtistMetadata(db, artist, { source: req.body?.source })
+  res.json(addArtistFallback(db, refreshed))
+})
+
+router.put('/:id/bio', (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  db.prepare('UPDATE artists SET bio = ?, bio_source = ?, bio_fetched_at = ? WHERE id = ?').run(req.body?.bio || '', 'manual', Date.now(), artist.id)
+  res.json({ ok: true })
+})
+
+router.put('/:id/image', async (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  const imageData = req.body?.imageData
+  if (!imageData) return res.status(400).json({ error: 'imageData is required' })
+  const imgPath = await saveArtistImageFromData(artist.id, imageData)
+  db.prepare('UPDATE artists SET image_path = ?, image_source = ?, image_fetched_at = ? WHERE id = ?').run(imgPath, 'manual', Date.now(), artist.id)
+  res.json({ ok: true, path: imgPath })
+})
+
+router.put('/:id/image-url', async (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  const url = req.body?.url
+  if (!url) return res.status(400).json({ error: 'url is required' })
+  const imgPath = path.join(require('../../electron/ipc/db').getStorageDir(), 'artwork', `artist-${artist.id}.jpg`)
+  await fetch(url).then(async (response) => {
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`)
+    const arrayBuffer = await response.arrayBuffer()
+    await fs.writeFile(imgPath, Buffer.from(arrayBuffer))
+  })
+  db.prepare('UPDATE artists SET image_path = ?, image_source = ?, image_fetched_at = ? WHERE id = ?').run(imgPath, 'manual', Date.now(), artist.id)
+  res.json({ ok: true, path: imgPath })
+})
+
+router.post('/:id/metadata-selection', async (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  const updated = await applyArtistMetadataSelection(db, artist.id, req.body?.selection || null, { mode: req.body?.mode || 'both' })
+  res.json(updated ? addArtistFallback(db, updated) : { error: 'Unable to apply selection' })
+})
+
+router.post('/:id/image/fallback', (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  const updated = clearArtistImageOverride(db, artist.id)
+  res.json(updated ? addArtistFallback(db, updated) : { error: 'Unable to clear image override' })
+})
+
+router.get('/:id/albums/:album/tracks', (req, res) => {
+  const db = getDB()
+  const artist = findArtistById(db, req.params.id)
+  if (!artist) return res.status(404).json({ error: 'Not found' })
+  res.json(db.prepare(`
+    SELECT t.* FROM tracks t
+    JOIN artist_track_links atl ON atl.track_id = t.id
+    WHERE atl.artist_id = ? AND t.album = ? AND t.file_path NOT LIKE 'ghost://%'
+    ORDER BY t.track_num, t.title
+  `).all(artist.id, req.params.album))
+})
+
+module.exports = router
+// Exposed so other endpoints (see the /api/artist-image route in
+// server/index.js) resolve the same fallback image the artists list/detail
+// endpoints already report in `image_path` — see addArtistFallback above.
+module.exports.addArtistFallback = addArtistFallback

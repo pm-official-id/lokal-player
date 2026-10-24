@@ -1,0 +1,62 @@
+import React, { useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { motion, AnimatePresence } from 'framer-motion'
+import { X } from 'lucide-react'
+
+/**
+ * @param onEntered  called once the opening animation has finished, so heavy
+ *                   content (long lists with artwork) can mount after it
+ *                   instead of stuttering it.
+ */
+export default function Modal({ open, onClose, title, children, width = 'max-w-md', onEntered }) {
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose?.() }
+    if (open) document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
+  // Rendered at the end of <body>, so no page wrapper (a transform, a
+  // filter) can move or clip it: it always covers the screen.
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4"
+        >
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 8 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+            onAnimationComplete={(target) => { if (target?.opacity === 1) onEntered?.() }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={typeof title === 'string' ? title : undefined}
+            className={`relative z-10 flex max-h-[calc(100vh-1.5rem)] w-full flex-col ${width} bg-elevated border border-border rounded-2xl shadow-2xl overflow-hidden sm:max-h-[calc(100vh-2rem)]`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {title && (
+              <div className="flex items-center justify-between px-5 pt-4 pb-0 sm:px-6 sm:pt-5">
+                <h2 className="font-display text-sm uppercase tracking-widest text-white">{title}</h2>
+                {onClose && (
+                  <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg text-muted hover:text-white hover:bg-card transition-colors">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="min-h-0 overflow-y-auto p-5 sm:p-6">
+              {children}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body
+  )
+}

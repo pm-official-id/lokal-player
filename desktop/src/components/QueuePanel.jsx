@@ -1,0 +1,311 @@
+import React, { useEffect, useState } from 'react'
+import { motion } from 'framer-motion'
+import { X, Music, GripVertical, ListPlus, ListStart, FolderPlus } from 'lucide-react'
+import { usePlayerStore, useAppStore } from '../store/player'
+import { useShallow } from 'zustand/react/shallow'
+import { api } from '../api'
+import { useTranslation } from '../i18n'
+import { trackArtURL } from '../onlineTracks'
+
+// The actual queue list, with no opinion about how it's framed -- used both
+// by the standalone panel below (independent mode) and embedded directly
+// inside RightSidebar's sliding overlay (merged mode) and FullscreenPlayer's
+// side panel, so all three presentations never drift out of sync with each
+// other. variant="fullscreen" swaps in a header that matches the fullscreen
+// Lyrics panel's header (same padding/type treatment) and drops the close
+// button -- in fullscreen, closing the queue is done by clicking the same
+// Queue button that opened it, not a button inside the panel.
+// A big queue (a 4,600-song playlist) draws only the songs around the
+// current one; "Show earlier"/"Show more" reveal the rest a page at a time.
+const BEFORE = 10
+const AFTER = 150
+const PAGE = 200
+// Reorder animations measure every row, so only small queues get them.
+const ANIMATE_UP_TO = 150
+
+export function QueueContent({ onClose, variant = 'panel' }) {
+  const { t } = useTranslation()
+  const {
+    queue, queueIndex, playQueue, playbackContext, isBuffering,
+    shuffle, shuffleQueue, shuffleIndex, playNext, addToQueue, reorderQueue, removeFromQueue, clearUpcoming, playNextIds,
+  } = usePlayerStore(useShallow(({
+    queue, queueIndex, playQueue, playbackContext, isBuffering,
+    shuffle, shuffleQueue, shuffleIndex, playNext, addToQueue, reorderQueue, removeFromQueue, clearUpcoming, playNextIds,
+  }) => ({
+    queue, queueIndex, playQueue, playbackContext, isBuffering,
+    shuffle, shuffleQueue, shuffleIndex, playNext, addToQueue, reorderQueue, removeFromQueue, clearUpcoming, playNextIds,
+  })))
+  const { openAddToPlaylist } = useAppStore()
+
+  const [draggedIndex, setDraggedIndex] = useState(null)
+  const [dragOverIndex, setDragOverIndex] = useState(null)
+
+  const displayQueue = shuffle ? shuffleQueue : queue
+  const displayIndex = shuffle ? shuffleIndex : queueIndex
+  const [extra, setExtra] = useState({ before: 0, after: 0 })
+  useEffect(() => { setExtra({ before: 0, after: 0 }) }, [displayQueue, shuffle])
+  const at = Math.max(0, displayIndex)
+  const playNextSet = new Set(playNextIds)
+  const playNextCount = displayQueue.slice(Math.max(-1, displayIndex) + 1).filter(track => playNextSet.has(track.id)).length
+  const clearButton = (className) => playNextCount > 0 && (
+    <button onClick={clearUpcoming} title={t('Remove the songs added with Play Next')} className={className}>
+      {t('Clear Play Next')} ({playNextCount})
+    </button>
+  )
+  const start = Math.max(0, at - BEFORE - extra.before)
+  const end = Math.min(displayQueue.length, at + AFTER + extra.after)
+  const shown = displayQueue.slice(start, end)
+  const animate = displayQueue.length <= ANIMATE_UP_TO
+
+  const artSrc = (track) => trackArtURL(track)
+
+  const handleDragStart = (e, index) => {
+    setDraggedIndex(index)
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      type: 'track',
+      track: displayQueue[index],
+    }))
+    e.dataTransfer.effectAllowed = 'both'
+  }
+
+  const handleDragOver = (e, index) => {
+    if (draggedIndex === null) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverIndex(index)
+  }
+
+  const handleDrop = (e, index) => {
+    e.preventDefault()
+    if (draggedIndex === null) return
+    reorderQueue(draggedIndex, index)
+    setDraggedIndex(null)
+    setDragOverIndex(null)
+  }
+
+  const handleDragEnd = () => {
+    setDraggedIndex(null)
+    setDragOverIndex(null)
+  }
+
+  const handlePlayNext = (track, e) => {
+    e.stopPropagation()
+    playNext(track)
+  }
+
+  const handleAddToQueue = (track, e) => {
+    e.stopPropagation()
+    addToQueue(track)
+  }
+
+  const handleDragToPlaylist = (track, e) => {
+    e.stopPropagation()
+    openAddToPlaylist(track)
+  }
+
+  const handleRemove = (trackId, index, e) => {
+    e.stopPropagation()
+    removeFromQueue(trackId, index)
+  }
+
+  return (
+    <>
+      {variant === 'fullscreen' ? (
+        <div className="px-8 pt-6 pb-3 flex-shrink-0 flex items-center justify-between">
+          <div>
+            <p className="text-xs font-display text-white/30 uppercase tracking-[0.2em]">
+              {shuffle ? 'Up Next (Shuffled)' : 'Queue'}
+            </p>
+            <p className="text-xs text-white/20 mt-0.5 truncate">
+              {displayQueue.length} track{displayQueue.length === 1 ? '' : 's'}
+            </p>
+          </div>
+          {clearButton('text-xs font-display uppercase tracking-wider text-white/40 hover:text-white transition-colors')}
+        </div>
+      ) : (
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+          <div>
+            <p className="text-xs font-display text-muted uppercase tracking-widest">
+              {shuffle ? 'Up Next (Shuffled)' : 'Queue'} ({displayQueue.length})
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {clearButton('text-[10px] font-display uppercase tracking-wider text-muted hover:text-white transition-colors')}
+            {onClose && (
+              <button onClick={onClose} className="text-muted hover:text-white transition-colors">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-2 pb-[calc(var(--player-space,0px)+0.5rem)]">
+        {!displayQueue.length && (
+          <p className="text-xs text-muted text-center py-8">{t("Queue is empty")}</p>
+        )}
+
+        {start > 0 && (
+          <button
+            onClick={() => setExtra(prev => ({ ...prev, before: prev.before + PAGE }))}
+            className="w-full text-xs text-muted hover:text-white py-2 transition-colors"
+          >
+            Show earlier ({start})
+          </button>
+        )}
+
+        <div className="space-y-1">
+          {shown.map((track, offset) => {
+            const i = start + offset
+            const isCurrent = i === displayIndex
+            const src = artSrc(track)
+            const isDragging = draggedIndex === i
+            const isDragOver = dragOverIndex === i
+            const Row = animate ? motion.div : 'div'
+
+            return (
+              <Row
+                layout={animate || undefined}
+                key={`${track.id}-${i}`}
+                draggable
+                onDragStart={(e) => handleDragStart(e, i)}
+                onDragOver={(e) => handleDragOver(e, i)}
+                onDrop={(e) => handleDrop(e, i)}
+                onDragEnd={handleDragEnd}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all text-left group relative border-t-2 ${
+                  isCurrent ? 'bg-accent/15' : 'hover:bg-elevated'
+                } ${
+                  isDragging ? 'opacity-20 scale-[0.98]' : 'opacity-100'
+                } ${
+                  isDragOver ? 'border-t-accent' : 'border-t-transparent'
+                }`}
+              >
+                {isCurrent && isBuffering && (
+                  <div role="progressbar" aria-label={t("Loading track")} className="absolute bottom-0 left-2 right-2 h-0.5 overflow-hidden rounded-full bg-elevated">
+                    <div className="queue-loading-seekbar h-full w-1/3 rounded-full bg-accent" />
+                  </div>
+                )}
+                <div
+                  className="flex-shrink-0 cursor-grab active:cursor-grabbing p-1 z-20 transition-opacity opacity-0 group-hover:opacity-100"
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <GripVertical size={14} className="text-muted" />
+                </div>
+
+                <div
+                  className="flex flex-1 items-center gap-2 min-w-0 cursor-pointer z-10"
+                  onClick={() => shuffle ? playQueue(shuffleQueue, i, playbackContext) : playQueue(queue, i, playbackContext)}
+                >
+                  <span className="text-xs text-muted w-5 text-center flex-shrink-0 font-display">
+                    {isCurrent ? '▶' : i + 1}
+                  </span>
+
+                  <div className="w-9 h-9 rounded bg-card overflow-hidden flex-shrink-0 flex items-center justify-center text-subtle relative">
+                    {src ? (
+                      <img src={src} loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                    ) : (
+                      <Music size={12} />
+                    )}
+                    {isCurrent && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-xs font-medium truncate ${isCurrent ? 'text-accent' : 'text-white'}`}>
+                      {track.title}
+                    </p>
+                    <p className="text-xs text-muted truncate">{track.artist}</p>
+                  </div>
+                </div>
+
+                <div
+                  className={`flex-shrink-0 items-center gap-1 z-20 ${isCurrent ? 'flex' : 'hidden group-hover:flex'}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    onClick={(e) => handlePlayNext(track, e)}
+                    title={t("Play next")}
+                    className="p-1 rounded hover:bg-accent/20 text-muted hover:text-accent transition-colors"
+                  >
+                    <ListStart size={14} />
+                  </button>
+
+                  <button
+                    onClick={(e) => handleAddToQueue(track, e)}
+                    title={t("Add to queue")}
+                    className="p-1 rounded hover:bg-accent/20 text-muted hover:text-accent transition-colors"
+                  >
+                    <ListPlus size={14} />
+                  </button>
+
+                  <button
+                    onClick={(e) => handleDragToPlaylist(track, e)}
+                    title={t("Add to playlist")}
+                    className="p-1 rounded hover:bg-accent/20 text-muted hover:text-accent transition-colors"
+                  >
+                    <FolderPlus size={14} />
+                  </button>
+
+                  {!isCurrent && (
+                    <button
+                      onClick={(e) => handleRemove(track.id, i, e)}
+                      title={t("Remove from queue")}
+                      className="p-1 rounded hover:bg-red-500/20 text-muted hover:text-red-400 transition-colors"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </Row>
+            )
+          })}
+        </div>
+
+        {end < displayQueue.length && (
+          <button
+            onClick={() => setExtra(prev => ({ ...prev, after: prev.after + PAGE }))}
+            className="w-full text-xs text-muted hover:text-white py-2 transition-colors"
+          >
+            Show more ({displayQueue.length - end})
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+// Standalone panel used only in independent mode -- merged mode never
+// mounts this; its queue view is embedded directly inside RightSidebar
+// instead, so the two panels can never overlap or momentarily add up their
+// widths against each other.
+export default function QueuePanel() {
+  const { t } = useTranslation()
+  const { showQueue, toggleQueue } = usePlayerStore(useShallow(({ showQueue, toggleQueue }) => ({ showQueue, toggleQueue })))
+
+  return (
+    <>
+      {showQueue && (
+        <motion.aside
+          initial={{ width: 0 }}
+          animate={{ width: 320 }}
+          transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+          className="overflow-hidden flex-shrink-0"
+          style={{ minWidth: 320 }}
+        >
+          <motion.div
+            initial={{ x: 320 }}
+            animate={{ x: 0 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            className="h-full flex flex-col border-l border-border"
+            style={{ width: 320, backgroundColor: 'rgba(var(--surface-rgb), 0.85)', backdropFilter: 'blur(12px)' }}
+          >
+            <QueueContent onClose={toggleQueue} />
+          </motion.div>
+        </motion.aside>
+      )}
+    </>
+  )
+}

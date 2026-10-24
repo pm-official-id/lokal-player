@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#121212">
+  <title>Lokal Remote</title>
+  <link rel="manifest" href="/remote-manifest.json">
+  <style>
+    :root {
+      color-scheme: dark;
+      --surface: rgba(22, 22, 22, 0.78);
+      --border: rgba(255,255,255,0.11);
+      --text: #f2f2f2;
+      --muted: rgba(255,255,255,0.65);
+      --dim: rgba(255,255,255,0.38);
+      --accent: #d7ff5a;
+      --accent-2: #beef2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Inter", system-ui, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 20% 0%, #2b2b2b 0%, #0b0b0b 52%, #050505 100%);
+    }
+    .bg {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      background-size: cover;
+      background-position: center;
+      filter: blur(52px) saturate(1.2) brightness(0.55);
+      transform: scale(1.12);
+      opacity: .92;
+      pointer-events: none;
+    }
+    .veil {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background: linear-gradient(180deg, rgba(0,0,0,.35), rgba(0,0,0,.65));
+      pointer-events: none;
+    }
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 14px 14px 24px;
+      display: grid;
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--surface);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+      padding: 12px;
+    }
+    .row { display: flex; align-items: center; gap: 10px; }
+    .title { font-size: 19px; font-weight: 800; line-height: 1.2; }
+    .sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tiny { font-size: 11px; color: var(--dim); }
+    .pill {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 84px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    .art {
+      width: 84px;
+      height: 84px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #1f1f1f;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      color: var(--dim);
+      font-weight: 700;
+    }
+    .art img { width: 100%; height: 100%; object-fit: cover; }
+    .lyrics {
+      min-height: 58px;
+      display: grid;
+      gap: 4px;
+      align-content: center;
+      margin-top: 8px;
+    }
+    .ly1 { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ly2 { font-size: 12px; color: rgba(255,255,255,.42); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .char-on { color: rgba(255,255,255,.92); font-style: italic; }
+    .char-off { color: rgba(255,255,255,.4); font-style: italic; }
+
+    .controls { padding: 14px 12px; }
+    .transport {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    button {
+      min-height: 44px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.08);
+      color: var(--text);
+      font-weight: 700;
+      font-size: 13px;
+      transition: .12s ease;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.09);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    button:hover { border-color: rgba(255,255,255,.24); }
+    button:active { transform: scale(.98); }
+    button:disabled { opacity: .35; }
+    .play-main {
+      width: 64px;
+      height: 64px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      color: #101010;
+      border: 0;
+      box-shadow: 0 8px 24px rgba(190,239,47,.25);
+    }
+    .icon-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+    }
+    .icon-btn svg, .play-main svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .play-main svg { width: 26px; height: 26px; }
+
+    .meter {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.1);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.1);
+    }
+    .meter-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 16px rgba(215,255,90,.35);
+      pointer-events: none;
+    }
+    .meter input[type=range] {
+      position: absolute;
+      inset: -5px 0;
+      width: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .wrap { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+    .library-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
+    .library-tab { min-height: 38px; padding: 6px 2px; border-radius: 10px; font-size: 11px; background: rgba(255,255,255,.045); color: var(--muted); }
+    .library-tab[aria-pressed="true"] { background: rgba(215,255,90,.15); border-color: rgba(215,255,90,.38); color: var(--accent); }
+    .library-search { margin-top: 12px; }
+    .library-search input { width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: 12px; background: rgba(0,0,0,.24); color: var(--text); padding: 0 12px; outline: none; font-size: 14px; }
+    .library-search input:focus { border-color: rgba(215,255,90,.55); }
+    .library-list { display: grid; gap: 8px; margin-top: 12px; }
+    .library-item { display: grid; grid-template-columns: 48px minmax(0,1fr); align-items: center; gap: 9px; border: 1px solid var(--border); border-radius: 12px; padding: 9px; background: rgba(255,255,255,.035); }
+    .library-cover { width: 48px; height: 48px; border-radius: 8px; background: #242424; display: grid; place-items: center; overflow: hidden; color: var(--dim); font-weight: 800; flex-shrink: 0; }
+    .library-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .library-copy { min-width: 0; }
+    .library-name { color: var(--text); font-size: 13px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .library-sub { color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; margin-top: 2px; }
+    .library-item-actions { display: flex; justify-content: flex-end; gap: 6px; grid-column: 1 / -1; }
+    .library-action { min-height: 32px; border-radius: 9px; padding: 5px 10px; font-size: 11px; background: rgba(255,255,255,.065); }
+    .library-action.primary { color: #111; background: var(--accent); border-color: transparent; }
+    .library-collection-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .library-collection-actions .library-action { flex: 1; }
+    .library-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .library-back { min-height: 34px; width: 38px; border-radius: 10px; flex-shrink: 0; }
+    .library-count { font-size: 11px; color: var(--dim); white-space: nowrap; }
+    .library-empty { text-align: center; color: var(--muted); font-size: 13px; padding: 22px 8px; }
+    .library-message { margin-top: 8px; min-height: 14px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .library-more { width: 100%; min-height: 38px; margin-top: 10px; border-radius: 10px; font-size: 12px; }
+    .mini-dock { position: fixed; z-index: 60; left: 0; right: 0; bottom: 0; padding: 9px 14px calc(9px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: rgba(12,12,12,.91); backdrop-filter: blur(18px); box-shadow: 0 -8px 28px rgba(0,0,0,.35); }
+    .mini-dock-inner { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; }
+    .mini-track { min-width: 0; }
+    .mini-title { font-size: 13px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mini-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .mini-controls { display: flex; align-items: center; gap: 6px; }
+    .mini-button { width: 38px; min-height: 38px; height: 38px; border-radius: 999px; }
+    .mini-button svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    .mini-button.main { background: var(--accent); color: #111; border-color: transparent; }
+    @media (min-width: 620px) {
+      .library-item { grid-template-columns: 48px minmax(0,1fr) auto; }
+      .library-item-actions { grid-column: auto; }
+      .library-action { min-height: 34px; padding: 5px 11px; }
+    }
+    @media (max-width: 360px) {
+      .library-tab { font-size: 10px; }
+      .library-action { padding: 5px 7px; }
+      .library-item { padding: 8px; gap: 7px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="bg" class="bg"></div>
+  <div class="veil"></div>
+  <main class="wrap">
+    <section class="card hero">
+      <div class="art" id="art">L</div>
+      <div>
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <div id="trackTitle" class="title" data-rt="No track">No track</div>
+            <div id="trackArtist" class="sub" data-rt="Open this from your phone on same Wi-Fi">Open this from your phone on same Wi-Fi</div>
+          </div>
+          <span id="status" class="pill" data-rt="offline">offline</span>
+        </div>
+        <div class="lyrics">
+          <div id="ly1" class="ly1"></div>
+          <div id="ly2" class="ly2"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card controls">
+      <div class="transport">
+        <button id="prevBtn" class="icon-btn" title="Previous" aria-label="Previous" data-rt-title="Previous" data-rt-aria-label="Previous"></button>
+        <button id="playBtn" class="play-main" title="Play or Pause" aria-label="Play or Pause" data-rt-title="Play or Pause" data-rt-aria-label="Play or Pause"></button>
+        <button id="nextBtn" class="icon-btn" title="Next" aria-label="Next" data-rt-title="Next" data-rt-aria-label="Next"></button>
+        <button id="likeBtn" class="icon-btn" title="Like" aria-label="Like" data-rt-title="Like" data-rt-aria-label="Like"></button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row" style="justify-content:space-between">
+        <span id="timeCurrent" class="tiny">0:00</span>
+        <span id="timeTotal" class="tiny">0:00</span>
+      </div>
+      <div class="meter" style="margin-top:6px;">
+        <div id="seekFill" class="meter-fill"></div>
+        <input id="seek" type="range" min="0" max="1000" value="0">
+      </div>
+
+      <div class="row" style="justify-content:space-between; margin-top:10px;">
+        <span class="tiny" data-rt="Volume">Volume</span>
+        <span id="volumePct" class="tiny">80%</span>
+      </div>
+      <div class="meter" style="margin-top:6px;">
+        <div id="volumeFill" class="meter-fill"></div>
+        <input id="volume" type="range" min="0" max="100" value="80">
+      </div>
+    </section>
+
+    <section class="card" id="libraryCard">
+      <div class="row" style="justify-content:space-between; gap:8px;">
+        <div class="library-heading">
+          <button type="button" class="library-back" id="libraryBack" aria-label="Back" title="Back" data-rt-title="Back" data-rt-aria-label="Back" hidden>←</button>
+          <div style="min-width:0">
+            <div class="title" id="libraryTitle" style="font-size:17px;" data-rt="Your library">Your library</div>
+            <div id="libraryCount" class="tiny" data-rt="Browse music on this computer">Browse music on this computer</div>
+          </div>
+        </div>
+        <span class="pill" data-rt="Library">Library</span>
+      </div>
+      <nav class="library-nav" id="libraryTabs" aria-label="Library sections" data-rt-aria-label="Library sections">
+        <button type="button" class="library-tab" data-library-tab="tracks" aria-pressed="true" data-rt="Tracks">Tracks</button>
+        <button type="button" class="library-tab" data-library-tab="albums" aria-pressed="false" data-rt="Albums">Albums</button>
+        <button type="button" class="library-tab" data-library-tab="artists" aria-pressed="false" data-rt="Artists">Artists</button>
+        <button type="button" class="library-tab" data-library-tab="playlists" aria-pressed="false" data-rt="Playlists">Playlists</button>
+        <button type="button" class="library-tab" data-library-tab="liked" aria-pressed="false" data-rt="Liked">Liked</button>
+      </nav>
+      <div class="library-search">
+        <input id="librarySearch" type="search" placeholder="Search your library" aria-label="Search your library" data-rt-placeholder="Search your library" data-rt-aria-label="Search your library" autocomplete="off" enterkeyhint="search">
+      </div>
+      <div class="library-collection-actions" id="libraryCollectionActions" hidden>
+        <button type="button" class="library-action primary" data-collection-action="play" data-rt="Play all">Play all</button>
+        <button type="button" class="library-action" data-collection-action="next" data-rt="Play next">Play next</button>
+        <button type="button" class="library-action" data-collection-action="queue" data-rt="Add all">Add all</button>
+      </div>
+      <div class="library-message" id="libraryMessage" role="status" aria-live="polite"></div>
+      <div class="library-list" id="libraryResults">
+        <div class="library-empty" data-rt="Loading library…">Loading library…</div>
+      </div>
+      <button type="button" class="library-more" id="libraryLoadMore" data-rt="Load more" hidden>Load more</button>
+    </section>
+  </main>
+
+
+  <div class="mini-dock" role="region" aria-label="Current playback" data-rt-aria-label="Current playback">
+    <div class="mini-dock-inner">
+      <div class="mini-track">
+        <div class="mini-title" id="miniTitle" data-rt="No track playing">No track playing</div>
+        <div class="mini-artist" id="miniArtist" data-rt="Connect to Lokal">Connect to Lokal</div>
+      </div>
+      <div class="mini-controls">
+        <button type="button" id="miniPrevBtn" class="mini-button" title="Previous" aria-label="Previous" data-rt-title="Previous" data-rt-aria-label="Previous"></button>
+        <button type="button" id="miniPlayBtn" class="mini-button main" title="Play or pause" aria-label="Play or pause" data-rt-title="Play or pause" data-rt-aria-label="Play or pause"></button>
+        <button type="button" id="miniNextBtn" class="mini-button" title="Next" aria-label="Next" data-rt-title="Next" data-rt-aria-label="Next"></button>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Standalone phone remote: detect the phone's language without React/i18n.
+    const REMOTE_LOCALES = ["fr","de","es","it","pt-BR","nl","pl","sv"];
+    const REMOTE_TEXT = {"Previous":["Précédent","Zurück","Anterior","Precedente","Anterior","Vorige","Poprzedni","Föregående"],"Next":["Suivant","Weiter","Siguiente","Successivo","Próxima","Volgende","Następny","Nästa"],"Play or Pause":["Lire ou mettre en pause","Wiedergabe oder Pause","Reproducir o pausar","Riproduci o metti in pausa","Reproduzir ou pausar","Afspelen of pauzeren","Odtwórz lub wstrzymaj","Spela upp eller pausa"],"Play or pause":["Lire ou mettre en pause","Wiedergabe oder Pause","Reproducir o pausar","Riproduci o metti in pausa","Reproduzir ou pausar","Afspelen of pauzeren","Odtwórz lub wstrzymaj","Spela upp eller pausa"],"Like":["Aimer","Gefällt mir","Me gusta","Mi piace","Curtir","Vind ik leuk","Polub","Gilla"],"Volume":["Volume","Lautstärke","Volumen","Volume","Volume","Volume","Głośność","Volym"],"No track":["Aucun morceau","Kein Titel","Ninguna canción","Nessun brano","Nenhuma faixa","Geen nummer","Brak utworu","Ingen låt"],"offline":["hors ligne","offline","sin conexión","offline","offline","offline","offline","offline"],"online":["en ligne","online","en línea","online","online","online","online","online"],"Open this from your phone on same Wi-Fi":["Ouvrez ceci sur votre téléphone connecté au même Wi-Fi","Öffne dies auf deinem Handy im selben WLAN","Abre esto en tu teléfono conectado a la misma Wi-Fi","Apri questa pagina sul telefono collegato allo stesso Wi-Fi","Abra isto no seu celular conectado ao mesmo Wi-Fi","Open dit op je telefoon via hetzelfde wifi-netwerk","Otwórz to na telefonie połączonym z tą samą siecią Wi-Fi","Öppna detta på telefonen som är ansluten till samma Wi-Fi"],"Your library":["Votre bibliothèque","Deine Mediathek","Tu biblioteca","La tua libreria","Sua biblioteca","Je bibliotheek","Twoja biblioteka","Ditt bibliotek"],"Browse music on this computer":["Parcourir la musique de cet ordinateur","Musik auf diesem Computer durchsuchen","Explorar la música de este equipo","Sfoglia la musica su questo computer","Procurar músicas neste computador","Muziek op deze computer doorbladeren","Przeglądaj muzykę na tym komputerze","Bläddra bland musiken på den här datorn"],"Library":["Bibliothèque","Mediathek","Biblioteca","Libreria","Biblioteca","Bibliotheek","Biblioteka","Bibliotek"],"Tracks":["Morceaux","Titel","Canciones","Brani","Faixas","Nummers","Utwory","Låtar"],"Albums":["Albums","Alben","Álbumes","Album","Álbuns","Albums","Albumy","Album"],"Artists":["Artistes","Künstler","Artistas","Artisti","Artistas","Artiesten","Wykonawcy","Artister"],"Playlists":["Playlists","Playlists","Listas","Playlist","Playlists","Afspeellijsten","Playlisty","Spellistor"],"Liked":["Favoris","Gefällt mir","Me gusta","Brani piaciuti","Curtidas","Vind-ik-leuks","Polubione","Gillade"],"Liked songs":["Titres aimés","Lieblingssongs","Canciones que te gustan","Brani che ti piacciono","Músicas curtidas","Geliefde nummers","Polubione utwory","Gillade låtar"],"Search your library":["Rechercher dans votre bibliothèque","Mediathek durchsuchen","Buscar en tu biblioteca","Cerca nella libreria","Pesquisar na biblioteca","Zoek in je bibliotheek","Szukaj w bibliotece","Sök i biblioteket"],"Play all":["Tout lire","Alle abspielen","Reproducir todo","Riproduci tutto","Reproduzir tudo","Alles afspelen","Odtwórz wszystko","Spela upp alla"],"Play next":["Lire ensuite","Als Nächstes abspielen","Reproducir a continuación","Riproduci dopo","Tocar a seguir","Hierna afspelen","Odtwórz następny","Spela härnäst"],"Add all":["Tout ajouter","Alles hinzufügen","Añadir todo","Aggiungi tutto","Adicionar tudo","Alles toevoegen","Dodaj wszystko","Lägg till alla"],"Loading library…":["Chargement de la bibliothèque…","Mediathek wird geladen…","Cargando biblioteca…","Caricamento libreria…","Carregando biblioteca…","Bibliotheek laden…","Wczytywanie biblioteki…","Läser in biblioteket…"],"Load more":["Charger plus","Mehr laden","Cargar más","Carica altro","Carregar mais","Meer laden","Wczytaj więcej","Ladda mer"],"Current playback":["Lecture en cours","Aktuelle Wiedergabe","Reproducción actual","Riproduzione attuale","Reprodução atual","Huidige afspeelsessie","Bieżące odtwarzanie","Aktuell uppspelning"],"No track playing":["Aucun morceau en cours","Kein Titel wird abgespielt","No se está reproduciendo ninguna canción","Nessun brano in riproduzione","Nenhuma faixa tocando","Er wordt geen nummer afgespeeld","Żaden utwór nie jest odtwarzany","Ingen låt spelas"],"Connect to Lokal":["Se connecter à Lokal","Mit Lokal verbinden","Conectar con Lokal","Connetti a Lokal","Conectar ao Lokal","Verbinden met Lokal","Połącz z Lokal","Anslut till Lokal"],"Library sections":["Sections de la bibliothèque","Mediathekbereiche","Secciones de la biblioteca","Sezioni della libreria","Seções da biblioteca","Bibliotheeksecties","Sekcje biblioteki","Biblioteksavsnitt"],"track":["morceau","Titel","canción","brano","faixa","nummer","utwór","låt"],"tracks":["morceaux","Titel","canciones","brani","faixas","nummers","utwory","låtar"],"item":["élément","Element","elemento","elemento","item","item","element","objekt"],"items":["éléments","Elemente","elementos","elementi","itens","items","elementy","objekt"],"Unknown artist":["Artiste inconnu","Unbekannter Künstler","Artista desconocido","Artista sconosciuto","Artista desconhecido","Onbekende artiest","Nieznany wykonawca","Okänd artist"],"Smart playlist":["Playlist intelligente","Intelligente Playlist","Lista inteligente","Playlist intelligente","Playlist inteligente","Slimme afspeellijst","Inteligentna playlista","Smart spellista"],"Album":["Album","Album","Álbum","Album","Álbum","Album","Album","Album"],"Artist":["Artiste","Künstler","Artista","Artista","Artista","Artiest","Wykonawca","Artist"],"Playlist":["Playlist","Playlist","Lista","Playlist","Playlist","Afspeellijst","Playlista","Spellista"],"Open":["Ouvrir","Öffnen","Abrir","Apri","Abrir","Openen","Otwórz","Öppna"],"Play":["Lire","Abspielen","Reproducir","Riproduci","Reproduzir","Afspelen","Odtwórz","Spela upp"],"Queue":["File d’attente","Warteschlange","Cola","Coda","Fila","Wachtrij","Kolejka","Kö"],"Next shown":["Lire les éléments affichés ensuite","Angezeigte als Nächstes abspielen","Reproducir los mostrados a continuación","Riproduci i mostrati dopo","Tocar os itens exibidos a seguir","Getoonde hierna afspelen","Odtwórz wyświetlone jako następne","Spela visade härnäst"],"Add shown":["Ajouter les éléments affichés","Angezeigte hinzufügen","Añadir los mostrados","Aggiungi elementi mostrati","Adicionar itens exibidos","Getoonde toevoegen","Dodaj wyświetlone","Lägg till visade"],"Play shown":["Lire les éléments affichés","Angezeigte abspielen","Reproducir los mostrados","Riproduci elementi mostrati","Reproduzir itens exibidos","Getoonde afspelen","Odtwórz wyświetlone","Spela upp visade"],"No matches found.":["Aucune correspondance trouvée.","Keine Treffer gefunden.","No se encontraron coincidencias.","Nessuna corrispondenza trovata.","Nenhuma correspondência encontrada.","Geen overeenkomsten gevonden.","Nie znaleziono pasujących wyników.","Inga träffar hittades."],"Nothing here yet.":["Rien ici pour le moment.","Hier ist noch nichts.","Todavía no hay nada aquí.","Non c’è ancora nulla qui.","Ainda não há nada aqui.","Hier is nog niets.","Na razie nic tu nie ma.","Inget här ännu."],"Could not load library.":["Impossible de charger la bibliothèque.","Mediathek konnte nicht geladen werden.","No se pudo cargar la biblioteca.","Impossibile caricare la libreria.","Não foi possível carregar a biblioteca.","Bibliotheek kon niet worden geladen.","Nie można wczytać biblioteki.","Det gick inte att läsa in biblioteket."],"Sending to Lokal…":["Envoi à Lokal…","Wird an Lokal gesendet…","Enviando a Lokal…","Invio a Lokal…","Enviando para o Lokal…","Verzenden naar Lokal…","Wysyłanie do Lokal…","Skickar till Lokal…"],"Could not control playback: {error}":["Impossible de contrôler la lecture : {error}","Wiedergabe konnte nicht gesteuert werden: {error}","No se pudo controlar la reproducción: {error}","Impossibile controllare la riproduzione: {error}","Não foi possível controlar a reprodução: {error}","Afspelen kan niet worden bediend: {error}","Nie można sterować odtwarzaniem: {error}","Det gick inte att styra uppspelningen: {error}"],"Playing on this computer.":["Lecture sur cet ordinateur.","Wiedergabe auf diesem Computer.","Reproduciendo en este equipo.","Riproduzione su questo computer.","Reproduzindo neste computador.","Speelt af op deze computer.","Odtwarzanie na tym komputerze.","Spelas upp på den här datorn."],"Added {count} track(s) next.":["{count} morceau(x) ajouté(s) pour lecture ensuite.","{count} Titel zur nächsten Wiedergabe hinzugefügt.","Se añadieron {count} canciones para reproducir a continuación.","Aggiunti {count} brani alla riproduzione successiva.","{count} faixa(s) adicionada(s) para tocar a seguir.","{count} nummers toegevoegd om hierna af te spelen.","Dodano {count} utworów do następnego odtwarzania.","{count} låt(ar) lades till för nästa uppspelning."],"Added {count} track(s) to the queue.":["{count} morceau(x) ajouté(s) à la file d’attente.","{count} Titel zur Warteschlange hinzugefügt.","Se añadieron {count} canciones a la cola.","Aggiunti {count} brani alla coda.","{count} faixa(s) adicionada(s) à fila.","{count} nummers toegevoegd aan de wachtrij.","Dodano {count} utworów do kolejki.","{count} låt(ar) lades till i kön."],"Command failed":["Échec de la commande","Befehl fehlgeschlagen","El comando falló","Comando non riuscito","O comando falhou","Opdracht mislukt","Polecenie nie powiodło się","Kommandot misslyckades"],"This Lokal phone remote is protected. Enter REMOTE_TOKEN:":["Cette télécommande mobile Lokal est protégée. Saisissez REMOTE_TOKEN :","Diese Lokal-Handyfernbedienung ist geschützt. Gib REMOTE_TOKEN ein:","Este control remoto de Lokal está protegido. Introduce REMOTE_TOKEN:","Questo telecomando Lokal è protetto. Inserisci REMOTE_TOKEN:","Este controle remoto do Lokal está protegido. Digite REMOTE_TOKEN:","Deze Lokal-telefoonbediening is beveiligd. Voer REMOTE_TOKEN in:","Pilot Lokal na telefon jest chroniony. Wpisz REMOTE_TOKEN:","Den här fjärrkontrollen för Lokal är skyddad. Ange REMOTE_TOKEN:"],"That remote token was not accepted. Reload the remote page to try again.":["Ce jeton distant n’a pas été accepté. Rechargez la page pour réessayer.","Das Remote-Token wurde nicht akzeptiert. Lade die Seite neu und versuche es erneut.","El token remoto no se aceptó. Recarga la página para volver a intentarlo.","Il token remoto non è stato accettato. Ricarica la pagina e riprova.","O token remoto não foi aceito. Recarregue a página para tentar novamente.","De remote-token werd niet geaccepteerd. Laad de pagina opnieuw om het nogmaals te proberen.","Token zdalny nie został zaakceptowany. Odśwież stronę i spróbuj ponownie.","Fjärrtoken accepterades inte. Ladda om sidan och försök igen."],"This Lokal server is protected. Enter its API key:":["Ce serveur Lokal est protégé. Saisissez sa clé API :","Dieser Lokal-Server ist geschützt. Gib seinen API-Schlüssel ein:","Este servidor de Lokal está protegido. Introduce su clave API:","Questo server Lokal è protetto. Inserisci la chiave API:","Este servidor Lokal está protegido. Digite a chave de API:","Deze Lokal-server is beveiligd. Voer de API-sleutel in:","Ten serwer Lokal jest chroniony. Wpisz klucz API:","Den här Lokal-servern är skyddad. Ange dess API-nyckel:"],"This server refused the key.":["Ce serveur a refusé la clé.","Dieser Server hat den Schlüssel abgelehnt.","Este servidor rechazó la clave.","Il server ha rifiutato la chiave.","O servidor recusou a chave.","Deze server heeft de sleutel geweigerd.","Serwer odrzucił klucz.","Servern avvisade nyckeln."],"That key was not accepted. Enter the API key:":["Cette clé n’a pas été acceptée. Saisissez la clé API :","Der Schlüssel wurde nicht akzeptiert. Gib den API-Schlüssel ein:","La clave no se aceptó. Introduce la clave API:","La chiave non è stata accettata. Inserisci la chiave API:","A chave não foi aceita. Digite a chave de API:","De sleutel werd niet geaccepteerd. Voer de API-sleutel in:","Klucz nie został zaakceptowany. Wpisz klucz API:","Nyckeln accepterades inte. Ange API-nyckeln:"]};
+    const remoteLanguage = (() => {
+      const preferred = (navigator.languages || [navigator.language || 'en']).find(Boolean) || 'en';
+      if (/^pt(?:-|$)/i.test(String(preferred))) return 'pt-BR';
+      return REMOTE_LOCALES.find(code => String(preferred).toLowerCase().startsWith(code.toLowerCase())) || 'en';
+    })();
+    REMOTE_TEXT['Could not load library.'][7] = 'Det gick inte att läsa in biblioteket.';
+    REMOTE_TEXT['Pause'] = ["Pausa","Pause","Pausa","Pausa","Pausar","Pauzeren","Wstrzymaj","Pausa"];
+    function rt(key, values = {}) {
+      const row = REMOTE_TEXT[key];
+      const index = REMOTE_LOCALES.indexOf(remoteLanguage);
+      const value = row && index >= 0 ? (row[index] || key) : key;
+      return String(value).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    }
+    function applyRemoteTranslations(root = document) {
+      root.querySelectorAll('[data-rt]').forEach(el => { el.textContent = rt(el.getAttribute('data-rt')); });
+      root.querySelectorAll('[data-rt-title]').forEach(el => { el.title = rt(el.getAttribute('data-rt-title')); });
+      root.querySelectorAll('[data-rt-aria-label]').forEach(el => { el.setAttribute('aria-label', rt(el.getAttribute('data-rt-aria-label'))); });
+      root.querySelectorAll('[data-rt-placeholder]').forEach(el => { el.setAttribute('placeholder', rt(el.getAttribute('data-rt-placeholder'))); });
+    }
+
+    applyRemoteTranslations();
+
+    const els = {
+      bg: document.getElementById('bg'),
+      art: document.getElementById('art'),
+      title: document.getElementById('trackTitle'),
+      artist: document.getElementById('trackArtist'),
+      status: document.getElementById('status'),
+      play: document.getElementById('playBtn'),
+      like: document.getElementById('likeBtn'),
+      seek: document.getElementById('seek'),
+      seekFill: document.getElementById('seekFill'),
+      volume: document.getElementById('volume'),
+      volumeFill: document.getElementById('volumeFill'),
+      volumePct: document.getElementById('volumePct'),
+      timeCurrent: document.getElementById('timeCurrent'),
+      timeTotal: document.getElementById('timeTotal'),
+      ly1: document.getElementById('ly1'),
+      ly2: document.getElementById('ly2'),
+      miniTitle: document.getElementById('miniTitle'),
+      miniArtist: document.getElementById('miniArtist'),
+      miniPrev: document.getElementById('miniPrevBtn'),
+      miniPlay: document.getElementById('miniPlayBtn'),
+      miniNext: document.getElementById('miniNextBtn'),
+      libraryTitle: document.getElementById('libraryTitle'),
+      libraryCount: document.getElementById('libraryCount'),
+      libraryBack: document.getElementById('libraryBack'),
+      libraryTabs: document.getElementById('libraryTabs'),
+      librarySearch: document.getElementById('librarySearch'),
+      libraryResults: document.getElementById('libraryResults'),
+      libraryMessage: document.getElementById('libraryMessage'),
+      libraryLoadMore: document.getElementById('libraryLoadMore'),
+      libraryCollectionActions: document.getElementById('libraryCollectionActions')
+    }
+
+    let remoteToken = sessionStorage.getItem('lokal_remote_token') || new URLSearchParams(window.location.hash.slice(1)).get('token') || ''
+    let askingForRemoteToken = false
+    let remoteTokenPromptDismissed = false
+    async function askForRemoteToken() {
+      if (askingForRemoteToken || remoteTokenPromptDismissed) return false
+      askingForRemoteToken = true
+      try {
+        const token = window.prompt(rt('This Lokal phone remote is protected. Enter REMOTE_TOKEN:'))
+        if (!token?.trim()) { remoteTokenPromptDismissed = true; return false }
+        const candidate = token.trim()
+        const response = await fetch('/api/remote/state', { headers: { 'x-remote-token': candidate } }).catch(() => null)
+        if (!response?.ok) {
+          remoteTokenPromptDismissed = true
+          alert(rt('That remote token was not accepted. Reload the remote page to try again.'))
+          return false
+        }
+        remoteToken = candidate
+        sessionStorage.setItem('lokal_remote_token', candidate)
+        return true
+      } finally {
+        askingForRemoteToken = false
+      }
+    }
+
+    const store = {
+      state: null,
+      lyrics: [],
+      lyricsType: null,
+      lastTrackId: null,
+      seeking: false,
+      libraryView: { type: 'tracks' },
+      libraryStack: [],
+      libraryItems: [],
+      libraryTotal: 0,
+      libraryHasMore: false,
+      libraryLoading: false,
+      libraryRequest: 0,
+      libraryMessage: ''
+    }
+    const ICONS = {
+      prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 20L9 12L19 4V20Z"></path><path d="M5 19V5"></path></svg>',
+      play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5L19 12L8 19V5Z"></path></svg>',
+      pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5V19"></path><path d="M15 5V19"></path></svg>',
+      next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20L15 12L5 4V20Z"></path><path d="M19 19V5"></path></svg>',
+      heart: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 8.6C20.8 13 12 19.5 12 19.5S3.2 13 3.2 8.6C3.2 6 5.2 4.2 7.7 4.2C9.5 4.2 11 5.1 12 6.6C13 5.1 14.5 4.2 16.3 4.2C18.8 4.2 20.8 6 20.8 8.6Z"></path></svg>'
+    }
+
+    function paintStaticIcons() {
+      els.play.innerHTML = ICONS.play
+      els.like.innerHTML = ICONS.heart
+      document.getElementById('prevBtn').innerHTML = ICONS.prev
+      document.getElementById('nextBtn').innerHTML = ICONS.next
+    }
+
+    const fmt = (s = 0) => {
+      const sec = Math.max(0, Math.floor(Number(s) || 0))
+      return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+    }
+
+    const escapeHtml = (s = '') => s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+
+    // API_KEY set on the server: ask once, let the server store it as a
+    // cookie, then reload.
+    let askingForKey = false
+    /** Ask once for the server's API key, store it as a cookie via /api/auth, then reload. */
+    async function askForApiKey() {
+      if (askingForKey) return
+      askingForKey = true
+      try {
+        let message = rt('This Lokal server is protected. Enter its API key:')
+        for (;;) {
+          const key = window.prompt(message)
+          if (!key) return
+          const res = await fetch('/api/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key }),
+          }).catch(() => null)
+          if (res?.ok) { location.reload(); return }
+          if (res?.status === 403) {
+            // Plain HTTP from outside the local network: retrying won't help.
+            alert((await res.json().catch(() => ({}))).error || rt('This server refused the key.'))
+            return
+          }
+          message = rt('That key was not accepted. Enter the API key:')
+        }
+      } finally {
+        // Cancelled or refused: a later 401 can ask again.
+        askingForKey = false
+      }
+    }
+
+    async function call(path, opts = {}) {
+      const headers = { 'Content-Type': 'application/json' }
+      if (remoteToken) headers['x-remote-token'] = remoteToken
+      const res = await fetch(`/api/remote/${path}`, {
+        method: opts.method || 'GET',
+        headers,
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      })
+      if (res.status === 401) {
+        const body = await res.clone().json().catch(() => ({}))
+        if (body.needsApiKey) askForApiKey()
+        else if (body.error === 'Unauthorized') {
+          if (remoteToken) { remoteToken = ''; sessionStorage.removeItem('lokal_remote_token') }
+          if (await askForRemoteToken()) {
+            const retryHeaders = { 'Content-Type': 'application/json', 'x-remote-token': remoteToken }
+            const retry = await fetch(`/api/remote/${path}`, {
+              method: opts.method || 'GET',
+              headers: retryHeaders,
+              body: opts.body ? JSON.stringify(opts.body) : undefined,
+            })
+            if (!retry.ok) { remoteToken = ''; sessionStorage.removeItem('lokal_remote_token'); throw new Error(await retry.text()) }
+            return retry.json()
+          }
+        }
+      }
+      if (!res.ok) throw new Error(await res.text())
+      return res.json()
+    }
+
+    async function loadTheme() {
+      try {
+        const res = await fetch('/api/settings/theme')
+        if (!res.ok) return
+        const theme = await res.json()
+        const overrides = theme?.overrides || {}
+        const accent = overrides['--accent']
+        const accent2 = overrides['--accent-2']
+        const accentRgb = overrides['--accent-rgb']
+        if (accent) document.documentElement.style.setProperty('--accent', accent)
+        if (accent2) document.documentElement.style.setProperty('--accent-2', accent2)
+        if (accentRgb) {
+          const parts = String(accentRgb).split(',').map(v => Number(v.trim())).filter(v => Number.isFinite(v))
+          if (parts.length === 3) {
+            const toHex = (n) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
+            const hex = `#${toHex(parts[0])}${toHex(parts[1])}${toHex(parts[2])}`
+            document.documentElement.style.setProperty('--accent', hex)
+          }
+        }
+      } catch {}
+    }
+
+    async function callLyrics(track) {
+      if (!track?.id) return null
+      const query = new URLSearchParams({
+        title: track.title || '',
+        artist: track.artist || '',
+        album: track.album || '',
+        duration: String(Math.round(Number(track.duration || store.state?.duration || 0)))
+      })
+      const res = await fetch(`/api/lyrics/${encodeURIComponent(track.id)}?${query}`)
+      if (!res.ok) return null
+      return res.json()
+    }
+
+    async function command(action, value) {
+      try {
+        return await call('command', { method: 'POST', body: { action, value } })
+      } catch (error) {
+        return { error: error?.message || rt('Command failed') }
+      }
+    }
+
+    const sectionLabels = { tracks: rt('Tracks'), albums: rt('Albums'), artists: rt('Artists'), playlists: rt('Playlists'), liked: rt('Liked songs') }
+    const trackView = type => type === 'tracks' || type === 'liked' || type.endsWith('Tracks')
+    const libraryQuery = () => String(els.librarySearch.value || '').trim()
+    const trackIds = () => store.libraryItems.map(item => String(item.id || '')).filter(Boolean)
+    const trackCover = (id, hasArtwork) => hasArtwork && id
+      ? `<div class="library-cover"><img src="/api/artwork/${encodeURIComponent(id)}" alt="" loading="lazy"></div>`
+      : '<div class="library-cover" aria-hidden="true">♫</div>'
+
+    function renderTrackItem(track) {
+      return `<article class="library-item">
+        ${trackCover(track.id, track.hasArtwork)}
+        <div class="library-copy">
+          <div class="library-name" title="${escapeHtml(track.title)}">${escapeHtml(track.title)}</div>
+          <div class="library-sub">${escapeHtml(track.artist)}${track.album ? ' · ' + escapeHtml(track.album) : ''}</div>
+          <div class="library-sub">${fmt(track.duration)}${track.year ? ' · ' + escapeHtml(String(track.year)) : ''}${track.liked ? ' · ♥' : ''}</div>
+        </div>
+        <div class="library-item-actions">
+          <button type="button" class="library-action primary" data-library-action="play" data-track-id="${escapeHtml(track.id)}">${rt('Play')}</button>
+          <button type="button" class="library-action" data-library-action="next" data-track-id="${escapeHtml(track.id)}">${rt('Next')}</button>
+          <button type="button" class="library-action" data-library-action="queue" data-track-id="${escapeHtml(track.id)}">${rt('Queue')}</button>
+        </div>
+      </article>`
+    }
+
+    function renderBrowseItem(item, type) {
+      const id = item.coverTrackId
+      const count = Number(item.track_count || 0)
+      const sub = type === 'albums'
+        ? `${item.artist || rt('Unknown artist')} · ${count} ${rt(count === 1 ? 'track' : 'tracks')}${item.year ? ' · ' + item.year : ''}`
+        : type === 'artists'
+          ? `${count} ${rt(count === 1 ? 'track' : 'tracks')}`
+          : `${count} ${rt(count === 1 ? 'track' : 'tracks')}${item.smart ? ' · ' + rt('Smart playlist') : ''}`
+      const openType = type === 'albums' ? 'albumTracks' : type === 'artists' ? 'artistTracks' : 'playlistTracks'
+      const title = type === 'albums' ? item.title : type === 'artists' ? item.name : item.name
+      const dataTitle = type === 'albums' ? `data-title="${escapeHtml(item.title)}" data-artist="${escapeHtml(item.artist || '')}"` : ''
+      return `<article class="library-item">
+        ${trackCover(id, !!id)}
+        <div class="library-copy">
+          <div class="library-name" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+          <div class="library-sub">${escapeHtml(sub)}</div>
+        </div>
+        <div class="library-item-actions">
+          <button type="button" class="library-action primary" data-open-type="${openType}" data-open-id="${escapeHtml(item.id || '')}" ${dataTitle} data-open-name="${escapeHtml(title)}">${rt('Open')}</button>
+        </div>
+      </article>`
+    }
+
+    function currentLibraryTitle() {
+      const view = store.libraryView
+      if (view.type === 'albumTracks') return view.title || rt('Album')
+      if (view.type === 'artistTracks') return view.name || rt('Artist')
+      if (view.type === 'playlistTracks') return view.name || rt('Playlist')
+      return sectionLabels[view.type] || rt('Your library')
+    }
+
+    function renderLibrary() {
+      const view = store.libraryView
+      const items = store.libraryItems || []
+      const detail = view.type.endsWith('Tracks')
+      const rootType = detail ? view.parentType : view.type
+      els.libraryTitle.textContent = currentLibraryTitle()
+      els.libraryBack.hidden = store.libraryStack.length === 0
+      els.libraryCount.textContent = store.libraryLoading && !items.length
+        ? rt('Loading…')
+        : detail
+          ? `${items.length} ${rt(items.length === 1 ? 'track' : 'tracks')}`
+          : `${store.libraryTotal} ${sectionLabels[view.type]?.toLowerCase() || rt('items')}`
+      for (const button of els.libraryTabs.querySelectorAll('[data-library-tab]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.libraryTab === rootType))
+      }
+      const showCollection = trackView(view.type) && items.length > 0
+      els.libraryCollectionActions.hidden = !showCollection
+      const names = ['play', 'next', 'queue']
+      const labels = store.libraryHasMore ? [rt('Play shown'), rt('Next shown'), rt('Add shown')] : [rt('Play all'), rt('Play next'), rt('Add all')]
+      els.libraryCollectionActions.querySelectorAll('[data-collection-action]').forEach((button, index) => {
+        button.textContent = labels[names.indexOf(button.dataset.collectionAction)] || labels[index]
+        button.disabled = store.libraryLoading
+      })
+      els.libraryLoadMore.hidden = !store.libraryHasMore || detail
+      els.libraryLoadMore.disabled = store.libraryLoading
+      els.libraryLoadMore.textContent = store.libraryLoading ? rt('Loading…') : rt('Load more')
+      els.libraryMessage.textContent = store.libraryMessage || ''
+      if (!items.length) {
+        els.libraryResults.innerHTML = `<div class="library-empty">${store.libraryLoading ? rt('Loading library…') : (libraryQuery() ? rt('No matches found.') : rt('Nothing here yet.'))}</div>`
+        return
+      }
+      const type = view.type
+      els.libraryResults.innerHTML = items.map(item => trackView(type)
+        ? renderTrackItem(item)
+        : renderBrowseItem(item, type)).join('')
+    }
+
+    function libraryEndpoint(view, params) {
+      if (view.type === 'tracks') return 'library/tracks'
+      if (view.type === 'liked') return 'library/liked'
+      if (view.type === 'albums') return 'library/albums'
+      if (view.type === 'artists') return 'library/artists'
+      if (view.type === 'playlists') return 'library/playlists'
+      if (view.type === 'albumTracks') {
+        params.set('title', view.title || '')
+        params.set('artist', view.artist || '')
+        return 'library/album-tracks'
+      }
+      if (view.type === 'artistTracks') {
+        params.set('id', view.id || '')
+        return 'library/artist-tracks'
+      }
+      if (view.type === 'playlistTracks') {
+        params.set('id', view.id || '')
+        return 'library/playlist-tracks'
+      }
+      return 'library/tracks'
+    }
+
+    async function loadLibrary(append = false) {
+      const view = { ...store.libraryView }
+      const request = ++store.libraryRequest
+      const q = libraryQuery()
+      const detail = view.type.endsWith('Tracks')
+      const params = new URLSearchParams()
+      params.set('userId', String(store.state?.userId || 'guest'))
+      params.set('limit', '30')
+      params.set('offset', String(append ? store.libraryItems.length : 0))
+      if (q && !detail) params.set('q', q)
+      store.libraryLoading = true
+      store.libraryMessage = ''
+      if (!append) {
+        store.libraryItems = []
+        store.libraryTotal = 0
+        store.libraryHasMore = false
+      }
+      renderLibrary()
+      try {
+        const data = await call(`${libraryEndpoint(view, params)}?${params.toString()}`)
+        if (request !== store.libraryRequest) return
+        let items = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : []
+        if (q && detail) {
+          const needle = q.toLowerCase()
+          items = items.filter(item => [item.title, item.artist, item.album].some(value => String(value || '').toLowerCase().includes(needle)))
+        }
+        store.libraryItems = append ? [...store.libraryItems, ...items] : items
+        store.libraryTotal = q && detail ? items.length : Number(data?.total ?? items.length)
+        store.libraryHasMore = !detail && !!data?.hasMore
+        store.libraryMessage = ''
+      } catch (error) {
+        if (request === store.libraryRequest) {
+          store.libraryMessage = error?.message || rt('Could not load library.')
+          if (!append) store.libraryItems = []
+        }
+      } finally {
+        if (request === store.libraryRequest) {
+          store.libraryLoading = false
+          renderLibrary()
+        }
+      }
+    }
+
+    function switchLibraryTab(type) {
+      store.libraryStack = []
+      store.libraryView = { type }
+      store.libraryMessage = ''
+      loadLibrary()
+    }
+
+    function openLibraryItem(button) {
+      const type = button.dataset.openType
+      const id = button.dataset.openId || ''
+      const name = button.dataset.openName || ''
+      if (!type) return
+      const view = type === 'albumTracks'
+        ? { type, parentType: 'albums', title: button.dataset.title || name, artist: button.dataset.artist || '' }
+        : type === 'artistTracks'
+          ? { type, parentType: 'artists', id, name }
+          : { type, parentType: 'playlists', id, name }
+      store.libraryStack.push({ ...store.libraryView })
+      store.libraryView = view
+      loadLibrary()
+    }
+
+    async function sendLibraryAction(action, ids, targetId = '') {
+      const cleanIds = [...new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean))].slice(0, 5000)
+      if (!cleanIds.length) return
+      store.libraryMessage = rt('Sending to Lokal…')
+      renderLibrary()
+      let result
+      if (action === 'play') {
+        result = await command('playLibraryTrack', { trackId: targetId || cleanIds[0], trackIds: cleanIds })
+      } else if (action === 'next') {
+        result = await command('playNextTracks', { trackIds: cleanIds })
+      } else {
+        result = await command('queueTracks', { trackIds: cleanIds })
+      }
+      store.libraryMessage = result?.error
+        ? rt('Could not control playback: {error}', { error: String(result.error).slice(0, 180) })
+        : action === 'play'
+          ? rt('Playing on this computer.')
+          : action === 'next'
+            ? rt('Added {count} track(s) next.', { count: cleanIds.length })
+            : rt('Added {count} track(s) to the queue.', { count: cleanIds.length })
+      renderLibrary()
+    }
+
+    function renderLyrics() {
+      const lines = store.lyrics
+      if (!Array.isArray(lines) || !lines.length || !store.state) {
+        els.ly1.textContent = ''
+        els.ly2.textContent = ''
+        return
+      }
+      const progress = Number(store.state.progress || 0)
+      if (store.lyricsType === 'synced') {
+        let idx = 0
+        for (let i = 0; i < lines.length; i++) {
+          if ((lines[i].time ?? 0) <= progress) idx = i
+          else break
+        }
+        const cur = lines[idx]?.text || ''
+        const next = lines[idx + 1]?.text || ''
+        const lineStart = Number(lines[idx]?.time ?? progress)
+        const lineEnd = Number(lines[idx + 1]?.time ?? (lineStart + 3))
+        const ratio = Math.max(0, Math.min(1, (progress - lineStart) / Math.max(0.01, lineEnd - lineStart)))
+        const chars = Array.from(cur)
+        const activeCount = Math.max(0, Math.min(chars.length, Math.ceil(chars.length * ratio)))
+        els.ly1.innerHTML = chars.map((ch, i) => `<span class="${i < activeCount ? 'char-on' : 'char-off'}">${escapeHtml(ch)}</span>`).join('')
+        els.ly2.textContent = next
+        return
+      }
+      const idx = Math.max(0, Math.min(lines.length - 1, Math.floor(progress / 4)))
+      els.ly1.textContent = lines[idx]?.text || ''
+      els.ly2.textContent = lines[idx + 1]?.text || ''
+    }
+
+    function renderState(s) {
+      store.state = s || {}
+      const track = store.state.currentTrack || {}
+      els.title.textContent = track.title || rt('No track')
+      els.artist.textContent = track.artist || rt('Open this from your phone on same Wi-Fi')
+      els.play.innerHTML = store.state.isPlaying ? ICONS.pause : ICONS.play
+      els.like.innerHTML = ICONS.heart
+      els.status.textContent = store.state.connected ? rt('online') : rt('offline')
+      els.like.disabled = !track.id
+      els.miniTitle.textContent = track.title || rt('No track playing')
+      els.miniArtist.textContent = track.artist || rt('Connect to Lokal')
+      els.miniPlay.innerHTML = store.state.isPlaying ? ICONS.pause : ICONS.play
+      els.miniPlay.setAttribute('aria-label', store.state.isPlaying ? rt('Pause') : rt('Play'))
+
+      const dur = Math.max(0, Number(store.state.duration || 0))
+      const prog = Math.max(0, Math.min(dur, Number(store.state.progress || 0)))
+      const seekPct = dur > 0 ? (prog / dur) * 100 : 0
+      if (!store.seeking) els.seek.value = Math.round(seekPct * 10)
+      els.seekFill.style.width = `${seekPct}%`
+      els.timeCurrent.textContent = fmt(prog)
+      els.timeTotal.textContent = fmt(dur)
+
+      const vol = Math.max(0, Math.min(1, Number(store.state.volume || 0)))
+      const volPct = Math.round(vol * 100)
+      els.volume.value = volPct
+      els.volumeFill.style.width = `${volPct}%`
+      els.volumePct.textContent = `${volPct}%`
+
+      const artwork = track.id ? `/api/artwork/${encodeURIComponent(track.id)}` : ''
+      if (artwork) {
+        els.art.innerHTML = `<img src="${artwork}" alt="art">`
+        els.bg.style.backgroundImage = `url("${artwork}")`
+      } else {
+        els.art.textContent = 'L'
+        els.bg.style.backgroundImage = 'none'
+      }
+
+      if (store.lastTrackId !== (track.id || null)) {
+        store.lastTrackId = track.id || null
+        store.lyrics = []
+        store.lyricsType = null
+        if (track.id) {
+          callLyrics(track).then((r) => {
+            if (!r || store.lastTrackId !== track.id) return
+            store.lyrics = Array.isArray(r.lines) ? r.lines : []
+            store.lyricsType = r.type || null
+            renderLyrics()
+          }).catch(() => {})
+        } else {
+          renderLyrics()
+        }
+      } else {
+        renderLyrics()
+      }
+    }
+
+    async function refreshState() {
+      try {
+        const previousUserId = store.state?.userId
+        const s = await call('state')
+        renderState(s)
+        if (String(previousUserId || 'guest') !== String(s?.userId || 'guest')) {
+          // Invalidate pending loads and clear visible rows immediately so
+          // controls cannot submit track IDs from the previous account.
+          loadLibrary()
+        }
+      } catch {
+        els.status.textContent = rt('offline')
+      }
+    }
+
+    document.getElementById('prevBtn').onclick = () => command('prev')
+    document.getElementById('playBtn').onclick = () => command('togglePlay')
+    document.getElementById('nextBtn').onclick = () => command('next')
+    document.getElementById('likeBtn').onclick = () => command('toggleLike')
+    els.miniPrev.onclick = () => command('prev')
+    els.miniPlay.onclick = () => command('togglePlay')
+    els.miniNext.onclick = () => command('next')
+
+    els.libraryTabs.addEventListener('click', event => {
+      const button = event.target.closest('[data-library-tab]')
+      if (button) switchLibraryTab(button.dataset.libraryTab)
+    })
+    els.libraryBack.addEventListener('click', () => {
+      if (store.libraryStack.length) store.libraryView = store.libraryStack.pop()
+      else store.libraryView = { type: 'tracks' }
+      loadLibrary()
+    })
+    let librarySearchTimer = null
+    els.librarySearch.addEventListener('input', () => {
+      clearTimeout(librarySearchTimer)
+      librarySearchTimer = setTimeout(() => loadLibrary(), 180)
+    })
+    els.libraryLoadMore.addEventListener('click', () => loadLibrary(true))
+    els.libraryResults.addEventListener('click', event => {
+      const open = event.target.closest('[data-open-type]')
+      if (open) { openLibraryItem(open); return }
+      const button = event.target.closest('[data-library-action]')
+      if (!button) return
+      const id = button.dataset.trackId
+      const action = button.dataset.libraryAction
+      if (action === 'play') sendLibraryAction('play', trackIds(), id)
+      else if (action === 'next') sendLibraryAction('next', [id])
+      else sendLibraryAction('queue', [id])
+    })
+    els.libraryCollectionActions.addEventListener('click', event => {
+      const button = event.target.closest('[data-collection-action]')
+      if (!button) return
+      const action = button.dataset.collectionAction
+      sendLibraryAction(action, trackIds(), action === 'play' ? trackIds()[0] : '')
+    })
+
+    els.seek.addEventListener('pointerdown', () => { store.seeking = true })
+    els.seek.addEventListener('input', () => {
+      const pct = Math.max(0, Math.min(1000, Number(els.seek.value || 0))) / 10
+      els.seekFill.style.width = `${pct}%`
+    })
+    els.seek.addEventListener('pointerup', () => {
+      if (!store.state) return
+      const dur = Math.max(0, Number(store.state.duration || 0))
+      const target = (Math.max(0, Math.min(1000, Number(els.seek.value || 0))) / 1000) * dur
+      command('seek', target)
+      store.seeking = false
+    })
+
+    els.volume.addEventListener('input', () => {
+      const volPct = Math.max(0, Math.min(100, Number(els.volume.value || 0)))
+      els.volumeFill.style.width = `${volPct}%`
+      els.volumePct.textContent = `${volPct}%`
+      command('volume', volPct / 100)
+    })
+
+    paintStaticIcons()
+    els.miniPrev.innerHTML = ICONS.prev
+    els.miniPlay.innerHTML = ICONS.play
+    els.miniNext.innerHTML = ICONS.next
+    loadTheme()
+    refreshState()
+    loadLibrary()
+    setInterval(refreshState, 1200)
+
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/remote-sw.js').catch(() => {})
+  </script>
+</body>
+</html>

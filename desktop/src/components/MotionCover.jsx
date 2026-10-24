@@ -1,0 +1,152 @@
+// A moving cover over the still artwork, Apple Music style: a muted, looping
+// clip that fades in once its first frame is ready. The still cover stays
+// underneath the whole time, so a missing or failing clip just means the
+// usual artwork. Clips are looked up (and cached) by the main process; the
+// lookup is remembered per track here too, so reopening a view is instant.
+
+import React, { useEffect, useRef, useState } from 'react'
+import { api } from '../api'
+import { usePerformanceMode } from '../performanceMode'
+import { isWindowHidden, onWindowVisibility } from '../windowVisibility'
+import { seamlessLoop } from '../seamlessLoop'
+
+const COVER_FADE = 0.8 // s: the end of a moving cover fading into its start
+
+const lookups = new Map() // trackId -> Promise<{ src, source } | null>
+
+export function loadMotionCover(trackId) {
+  if (!trackId || !api.motionCover) return Promise.resolve(null)
+  if (!lookups.has(trackId)) {
+    if (lookups.size > 200) lookups.delete(lookups.keys().next().value)
+    lookups.set(trackId, Promise.resolve(api.motionCover(trackId)).catch(() => null))
+  }
+  return lookups.get(trackId)
+}
+
+/** Settings changed (moving covers turned on/off, sources): look again. */
+export function forgetMotionCovers() {
+  lookups.clear()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('lokal:settings-saved', forgetMotionCovers)
+  // A track was edited (title, artist, album...): its old answer may be wrong.
+  window.addEventListener('lokal:track-updated', (e) => { for (const id of e.detail?.ids || []) lookups.delete(id) })
+}
+
+/**
+ * Renders only the clip layer; put it over the still <img>.
+ * @param only      'square' (album-style clips, for the cover spot) or 'tall'
+ *                  (9:16 canvases, for a full-panel background); both if unset
+ * @param onActive  called with true while a clip is showing
+ * @param off       turned off for this song (motionCoverPrefs.js): the still cover only
+ */
+export default function MotionCover({ trackId, className = '', onActive, only, style, off = false }) {
+  const performanceMode = usePerformanceMode()
+  const [clip, setClip] = useState(null)
+  const [ready, setReady] = useState(false)
+  const [revision, setRevision] = useState(0)
+
+  // The track on screen was edited: look it up again.
+  useEffect(() => {
+    const onUpdated = (e) => { if ((e.detail?.ids || []).includes(trackId)) setRevision(r => r + 1) }
+    window.addEventListener('lokal:track-updated', onUpdated)
+    return () => window.removeEventListener('lokal:track-updated', onUpdated)
+  }, [trackId])
+
+  useEffect(() => {
+    let cancelled = false
+    setClip(null)
+    setReady(false)
+    onActive?.(false)
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    if (!trackId || reduced || off || performanceMode) return undefined
+    loadMotionCover(trackId).then(found => {
+      if (cancelled || !found?.src) return
+      if (only === 'square' && found.tall) return
+      if (only === 'tall' && !found.tall) return
+      setClip(found)
+    })
+    return () => { cancelled = true }
+  }, [trackId, only, revision, off, performanceMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unmounting (e.g. the next track has no artwork, so the parent stops
+  // rendering this) must also clear the parent's "clip showing" state -- the
+  // track-change reset above never runs then. Latest callback via a ref, and
+  // an empty dependency list, so this fires on unmount only.
+  const onActiveRef = useRef(onActive)
+  onActiveRef.current = onActive
+  useEffect(() => () => { onActiveRef.current?.(false) }, [])
+
+  // Moving album covers (Apple Music, Tidal...) fade from their end into their
+  // start: two copies take turns (see seamlessLoop.js). A Spotify Canvas
+  // (tall) is made to loop and keeps a plain <video loop>.
+  const canvas = !!clip && (clip.tall || clip.source === 'spotify')
+  const firstRef = useRef(null)
+  const secondRef = useRef(null)
+  const activeRef = useRef(null)
+  useEffect(() => {
+    activeRef.current = firstRef.current
+    if (!clip || canvas || !firstRef.current || !secondRef.current) return undefined
+    return seamlessLoop([firstRef.current, secondRef.current], { fade: COVER_FADE, onSwap: video => { activeRef.current = video } })
+  }, [clip, canvas])
+
+  // Don't spend the GPU on a clip nobody can see.
+  // (Minimized counts too: see windowVisibility.js.) A clip that arrives
+  // while nobody can see it (loaded or changed while minimized) doesn't
+  // autoplay; it starts when the window is back.
+  useEffect(() => onWindowVisibility((hidden) => {
+    const v = activeRef.current
+    if (!v) return
+    if (hidden) v.pause()
+    else v.play().catch(() => {})
+  }), [])
+
+  if (!clip || performanceMode) return null
+  const title = { apple: 'Moving cover from Apple Music', tidal: 'Moving cover from Tidal', spotify: 'Spotify Canvas' }[clip.source] || 'Moving cover'
+  if (canvas) {
+    return (
+      <video
+        ref={firstRef}
+        key={clip.src}
+        src={clip.src}
+        muted
+        loop
+        autoPlay={!isWindowHidden()}
+        playsInline
+        preload="auto"
+        disablePictureInPicture
+        onPlaying={() => { if (!ready) { setReady(true); onActive?.(true) } }}
+        onError={() => { setClip(null); onActive?.(false) }}
+        className={`absolute inset-0 h-full w-full object-cover ${className}`}
+        style={{ ...style, opacity: ready ? 1 : 0, transition: 'opacity 320ms ease' }}
+        title={title}
+      />
+    )
+  }
+  const videoProps = {
+    src: clip.src,
+    muted: true,
+    playsInline: true,
+    preload: 'auto',
+    disablePictureInPicture: true,
+    onError: () => { setClip(null); onActive?.(false) },
+    className: 'absolute inset-0 h-full w-full object-cover',
+  }
+  return (
+    <div
+      key={clip.src}
+      className={`absolute inset-0 ${className}`}
+      style={{ ...style, opacity: ready ? 1 : 0, transition: 'opacity 320ms ease' }}
+      title={title}
+    >
+      <video
+        {...videoProps}
+        ref={firstRef}
+        autoPlay={!isWindowHidden()}
+        onPlaying={() => { if (!ready) { setReady(true); onActive?.(true) } }}
+      />
+      <video {...videoProps} ref={secondRef} aria-hidden="true" style={{ visibility: 'hidden' }} />
+    </div>
+  )
+}

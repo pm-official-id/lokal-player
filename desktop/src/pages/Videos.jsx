@@ -1,0 +1,232 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Clapperboard, Play, Shuffle, Search, Plus, Check, MoreHorizontal, Clock, ListEnd, ListPlus, Download, Trash2, ScanSearch, X, Loader2, Gem } from 'lucide-react'
+import { api } from '../api'
+import { usePageReady } from '../pageCache'
+import { usePlayerStore } from '../store/player'
+import { useMusicVideoView } from '../musicVideo'
+import { useDownloads } from '../store/downloads'
+import { addToPlaylistMany, addToQueueMany, playNextMany } from '../trackActions'
+import { isStreamed } from '../onlineTracks'
+import SaveToLibraryButton from '../components/SaveToLibraryButton'
+import ContextMenu, { useContextMenu } from '../components/ContextMenu'
+import { showToast } from '../components/Toaster'
+import { cancelVideoIndex, startVideoIndex, useVideoIndex, videoIndexRunning } from '../videoIndex'
+import { useSelection } from '../selection'
+import SelectionBar from '../components/SelectionBar'
+import { startVideoPreview } from '../videoPreview'
+import { deleteVideoDownloads, downloadVideos, updateVideoLibrary } from '../videoActions'
+import { losslessMenuItem, losslessManyMenuItem } from '../quality'
+import { useTranslation } from '../i18n'
+
+// A video that isn't downloaded previews with YouTube's own animated preview
+// (a few seconds, no sound), looked up when the card is pointed at for a
+// moment; one YouTube doesn't have keeps its still. A preview whose link
+// stopped working is skipped and asked for again the next time.
+const PREVIEW_DELAY_MS = 400
+const stalePreviews = new Set() // videoIds whose remembered preview didn't load
+
+function useAnimatedPreview(item, hover, enabled) {
+  const [url, setUrl] = React.useState(null)
+  const videoId = item.video.videoId
+  React.useEffect(() => {
+    if (!enabled || !hover || !videoId) return undefined
+    let current = true
+    const timer = setTimeout(() => {
+      const force = stalePreviews.delete(videoId)
+      const query = item.video.title || `${item.track.artist} ${item.track.title}`
+      Promise.resolve(api.musicVideoAnimatedPreview(videoId, query, force)).then(found => { if (current) setUrl(found || null) }).catch(() => {})
+    }, PREVIEW_DELAY_MS)
+    return () => { current = false; clearTimeout(timer) }
+  }, [enabled, hover, videoId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const broken = () => { stalePreviews.add(videoId); setUrl(null) }
+  return [url, broken]
+}
+
+function VideoCard({ item, selected, playing, onSelect, onMenu, onSave, saving, preview }) {
+  const { t } = useTranslation()
+  const [hover, setHover] = React.useState(false)
+  const [failed, setFailed] = React.useState(false)
+  const [animated, animatedBroken] = useAnimatedPreview(item, hover, !preview)
+  const [animatedShown, setAnimatedShown] = React.useState(false)
+  React.useEffect(() => { if (!hover) setAnimatedShown(false) }, [hover])
+  const ref = React.useRef(null)
+  React.useEffect(() => { setFailed(false) }, [preview])
+  React.useEffect(() => {
+    const changing = event => { if (event.detail?.trackId === item.track.id || event.detail?.videoId === item.video.videoId) setHover(false) }
+    window.addEventListener('lokal:music-video-changing', changing)
+    return () => window.removeEventListener('lokal:music-video-changing', changing)
+  }, [item.track.id, item.video.videoId])
+  React.useEffect(() => {
+    const element = ref.current
+    if (!element || !hover || !preview) return undefined
+    let cleanup = () => {}
+    const start = () => { cleanup(); cleanup = startVideoPreview(element) }
+    element.addEventListener('loadedmetadata', start, { once: true })
+    if (element.readyState >= 1) start()
+    return () => { element.removeEventListener('loadedmetadata', start); cleanup(); element.pause(); element.removeAttribute('src'); element.load() }
+  }, [hover, preview, failed])
+  return <article className={`group relative min-w-0 ${selected ? 'rounded-xl ring-2 ring-accent/70' : ''}`} onContextMenu={onMenu}>
+    <button onClick={onSelect} aria-label={`${t("Play video:")} ${item.track.title}`} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} className="relative block w-full aspect-video overflow-hidden rounded-xl bg-card border border-border shadow-lg">
+      <img src={item.video.thumbnail} alt="" loading="lazy" className="w-full h-full object-cover transition-[transform,filter] duration-500 ease-out group-hover:scale-[1.03] group-hover:brightness-110" />
+      {preview && hover && !failed && <video ref={ref} src={preview} muted playsInline preload="metadata" onError={() => setFailed(true)} className="absolute inset-0 w-full h-full object-cover" />}
+      {!preview && hover && animated && <img src={animated} alt="" aria-hidden referrerPolicy="no-referrer" onLoad={() => setAnimatedShown(true)} onError={animatedBroken}
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${animatedShown ? 'opacity-100' : 'opacity-0'}`} />}
+      {/* Hover: a soft shade along the bottom and the length of the song,
+          instead of a play button over the picture (the preview plays). */}
+      <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/60 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-within:opacity-100" />
+      {item.track.duration > 0 && <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white">{Math.floor(item.track.duration / 60)}:{String(Math.floor(item.track.duration % 60)).padStart(2, '0')}</span>}
+      {item.downloaded && <span className="absolute bottom-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-white">{t("Downloaded")}</span>}
+      {playing && <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--bg-rgb))]"><Play size={9} fill="currentColor" />{t("Playing")}</span>}
+      {selected && <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[rgb(var(--bg-rgb))]"><Check size={13} strokeWidth={3} /></span>}
+    </button>
+    <div className="flex gap-2 items-center mt-3">
+      <div className="min-w-0 flex-1"><button onClick={onSelect} className="block truncate w-full text-left text-sm font-medium text-white hover:text-accent">{item.track.title}</button><p className="truncate text-xs text-muted mt-0.5">{item.track.artist}</p></div>
+      {isStreamed(item.track) && <SaveToLibraryButton track={item.track} className="p-1.5" />}
+      <button disabled={saving} onClick={onSave} title={item.saved ? t('Remove video from library') : t('Save video to library')} aria-label={item.saved ? t('Remove video from library') : t('Save video to library')} className={`p-1.5 rounded-full hover:bg-elevated disabled:opacity-50 ${item.saved ? 'text-accent' : 'text-muted'}`}>{item.saved ? <Check size={17} /> : <Plus size={17} />}</button>
+      <button onClick={onMenu} title={t("Video actions")} aria-label={`${t("Actions for")} ${item.track.title}`} className="p-1.5 rounded-full text-muted hover:text-text hover:bg-elevated"><MoreHorizontal size={17} /></button>
+    </div>
+  </article>
+}
+
+export default function Videos() {
+  const { t } = useTranslation()
+  const [items, setItems] = useState([])
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState('')
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState('all')
+  const [saving, setSaving] = useState(null)
+  const busy = useRef(false)
+  const loadRevision = useRef(0)
+  const jobs = useDownloads(s => s.jobs)
+  const currentId = usePlayerStore(s => s.currentTrack?.id)
+  // Finding the music videos of every library song (it only looks them up:
+  // nothing is downloaded). They join this page as they're found.
+  const indexing = useVideoIndex(videoIndexRunning)
+  const indexFound = useRef(0)
+  const menu = useContextMenu()
+  usePageReady(loaded)
+  const load = useCallback(() => {
+    const revision = ++loadRevision.current
+    api.musicVideoList().then(rows => {
+      if (revision !== loadRevision.current) return
+      if (!Array.isArray(rows)) throw new Error(rows?.error || 'Could not load music videos.')
+      setItems(rows); setError('')
+    }).catch(e => { if (revision === loadRevision.current) setError(e.message) }).finally(() => { if (revision === loadRevision.current) setLoaded(true) })
+  }, [])
+  useEffect(() => {
+    load()
+    window.addEventListener('lokal:refresh', load)
+    window.addEventListener('lokal:music-video-found', load)
+    return () => { loadRevision.current++; window.removeEventListener('lokal:refresh', load); window.removeEventListener('lokal:music-video-found', load) }
+  }, [load])
+  useEffect(() => api.onMusicVideoIndexProgress(progress => {
+    if (!progress) return
+    if (progress.found !== indexFound.current || !progress.running) { indexFound.current = progress.found; load() }
+    if (!progress.running && !progress.cancelled) showToast(`Found ${progress.found} music video${progress.found === 1 ? '' : 's'} for ${progress.total} song${progress.total === 1 ? '' : 's'}.`)
+  }), [load])
+  const startIndex = async () => {
+    indexFound.current = 0
+    const result = await startVideoIndex()
+    if (result?.error) showToast(result.error)
+  }
+  const completedVideos = jobs.filter(j => j.kind === 'music-video' && j.status === 'done').length
+  useEffect(() => { load() }, [completedVideos, load])
+  const visible = useMemo(() => items.filter(item => {
+    if (filter === 'saved' && !item.saved) return false
+    if (filter === 'downloaded' && !item.downloaded) return false
+    return `${item.track.title} ${item.track.artist}`.toLowerCase().includes(query.trim().toLowerCase())
+  }), [items, filter, query])
+  const keys = useMemo(() => visible.map(item => item.track.id), [visible])
+  const selection = useSelection(keys)
+  const selectedItems = visible.filter(row => selection.has(row.track.id))
+
+  const play = (item, shuffled = false, pool = visible) => {
+    if (!item) return
+    const state = usePlayerStore.getState()
+    // Opening the current video's card must not restart the song; playing a
+    // selection (its own list) always makes it the queue.
+    if (pool !== visible || state.currentTrack?.id !== item.track.id) {
+      const rows = shuffled ? pool.slice().sort(() => Math.random() - 0.5) : pool
+      const tracks = rows.map(row => row.track)
+      state.playQueue(tracks, Math.max(0, tracks.findIndex(t => t.id === item.track.id)), { type: 'videos', name: 'Videos' })
+    } else if (!state.isPlaying) state.togglePlay()
+    useMusicVideoView.getState().show()
+  }
+  const runAction = async (rows, action) => {
+    if (busy.current || !rows.length) return
+    busy.current = true
+    setSaving(rows.length === 1 ? rows[0].track.id : 'bulk')
+    try {
+      const result = await action(rows)
+      if (result.errors.length) showToast(`${result.errors.length} video action${result.errors.length === 1 ? '' : 's'} failed. ${result.errors[0]}`)
+      useDownloads.getState().load()
+      load()
+    } catch (e) { showToast(e.message) } finally { busy.current = false; setSaving(null) }
+  }
+  const saveMany = (rows, saved) => runAction(rows, list => updateVideoLibrary(list, saved, api, (id, value) => setItems(current => current.map(row => row.track.id === id ? { ...row, saved: value } : row))))
+  const downloadMany = rows => runAction(rows, list => downloadVideos(list, api))
+  const deleteMany = rows => {
+    const downloaded = rows.filter(row => row.downloaded)
+    if (busy.current || !downloaded.length) return
+    const name = downloaded.length === 1 ? `the downloaded video for "${downloaded[0].track.title}"` : `${downloaded.length} downloaded videos`
+    if (!window.confirm(`Delete ${name} from disk? This deletes the video files permanently. Your songs, audio files and saved video entries will be kept.`)) return
+    return runAction(downloaded, list => deleteVideoDownloads(list, api))
+  }
+  const save = item => saveMany([item], !item.saved)
+  const openMenu = (event, item) => {
+    event.preventDefault()
+    const keys = selection.contextSelect(item.track.id)
+    const chosen = visible.filter(row => keys.includes(String(row.track.id)))
+    const tracks = chosen.map(row => row.track)
+    menu.open(event, [
+    { label: chosen.length > 1 ? 'Play selected videos' : 'Play video', icon: Play, onSelect: () => play(chosen[0] || item, false, chosen) },
+    chosen.some(row => !row.saved) && { label: chosen.length > 1 ? 'Save selected videos to library' : 'Save video to library', icon: Plus, disabled: !!saving, onSelect: () => saveMany(chosen.filter(row => !row.saved), true) },
+    chosen.some(row => row.saved) && { label: chosen.length > 1 ? 'Remove selected videos from library' : 'Remove video from library', icon: Trash2, disabled: !!saving, onSelect: () => saveMany(chosen.filter(row => row.saved), false) },
+    { label: t('Download'), icon: Download, disabled: !!saving, onSelect: () => downloadMany(chosen) },
+    chosen.some(row => row.downloaded) && { label: 'Delete downloads', icon: Trash2, disabled: !!saving, onSelect: () => deleteMany(chosen) },
+    { separator: true },
+    { label: t('Play next'), icon: Clock, onSelect: () => playNextMany(tracks) },
+    { label: t('Add to queue'), icon: ListEnd, onSelect: () => addToQueueMany(tracks) },
+    { label: 'Add to playlist…', icon: ListPlus, onSelect: () => addToPlaylistMany(tracks) },
+    tracks.length === 1 ? losslessMenuItem(tracks[0], Gem) : losslessManyMenuItem(tracks, Gem),
+    ])
+  }
+
+  return <div className="p-6 space-y-6 max-w-7xl mx-auto pb-10">
+    <header className="flex flex-wrap items-end justify-between gap-4">
+      <div><p className="text-xs uppercase tracking-[0.2em] text-muted mb-2">{t("Your music, in motion")}</p><h1 className="text-3xl font-display text-white">{t("Videos")}</h1><p className="text-sm text-muted mt-2">{items.length} {t("music videos · Save your favorites and play them from your Videos folder.")}</p></div>
+      <div className="flex flex-wrap gap-2">
+        {api.isElectron && (indexing
+          ? <button onClick={cancelVideoIndex} title={t("Stop finding videos")} className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-text hover:border-accent/40"><Loader2 size={15} className="animate-spin text-accent" /><span className="tabular-nums">{indexing.total ? `${t('Finding videos')} ${indexing.done}/${indexing.total} · ${indexing.found} ${t('found')}` : t('Finding videos…')}</span><X size={14} className="text-muted" /></button>
+          : <button onClick={startIndex} title={t("Look up the music video of every song in your library. Videos are only found, not downloaded.")} className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-text hover:border-accent/40"><ScanSearch size={15} />{t("Find videos for my library")}</button>)}
+        <button disabled={!visible.length} onClick={() => play(visible[0])} className="inline-flex items-center gap-2 rounded-full px-4 py-2 bg-accent text-base disabled:opacity-40"><Play size={15} fill="currentColor" />{t("Play")}</button>
+        <button disabled={!visible.length} onClick={() => play(visible[Math.floor(Math.random() * visible.length)], true)} className="inline-flex items-center gap-2 rounded-full px-4 py-2 border border-border text-text disabled:opacity-40"><Shuffle size={15} />{t("Shuffle")}</button>
+      </div>
+    </header>
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div role="group" aria-label={t("Video collection")} className="flex gap-1 p-1 rounded-lg bg-elevated border border-border">
+        {[['all', 'All Videos'], ['saved', 'Saved'], ['downloaded', 'Downloaded']].map(([id, label]) => <button key={id} onClick={() => setFilter(id)} aria-pressed={filter === id} className={`px-3 py-1.5 rounded-md text-xs ${filter === id ? 'bg-accent text-base' : 'text-muted hover:text-text'}`}>{t(label)}</button>)}
+      </div>
+      <label className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2"><Search size={14} className="text-muted" /><input aria-label={t("Search videos")} placeholder={t("Search videos")} value={query} onChange={e => setQuery(e.target.value)} className="bg-transparent outline-none text-sm text-text w-44" /></label>
+    </div>
+    {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+    <div className="grid grid-cols-1 @sm:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4 gap-x-5 gap-y-7">
+      {visible.map(item => <VideoCard key={item.track.id} item={item} selected={selection.has(item.track.id)} playing={currentId === item.track.id} onSelect={event => selection.click(item.track.id, event) || play(item)} onSave={() => save(item)} saving={!!saving} onMenu={event => openMenu(event, item)} preview={item.downloaded && item.video.file ? api.fileURL(item.video.file) : null} />)}
+    </div>
+    {loaded && !visible.length && <div className="text-center py-16 text-muted"><Clapperboard size={40} className="mx-auto mb-4 opacity-40" /><p>{items.length ? t('No videos match this view.') : t('Your discovered music videos will appear here.')}</p><p className="text-xs mt-2">{t("Play songs to discover videos, or use “Find videos for my library” above.")}</p></div>}
+    {/* Like the Library's bar: short labels, and only what applies to the
+        selection (not greyed-out actions widening it). */}
+    <SelectionBar open={selection.count > 0} label={t('{count} selected', { count: selection.count })} onClear={selection.clear} actions={[
+      { label: t('Play'), icon: Play, onClick: () => play(selectedItems[0], false, selectedItems) },
+      { label: t('Play next'), icon: Clock, onClick: () => playNextMany(selectedItems.map(row => row.track)) },
+      { label: t('Add to queue'), icon: ListEnd, onClick: () => addToQueueMany(selectedItems.map(row => row.track)) },
+      { label: t('Add to playlist'), icon: ListPlus, onClick: () => addToPlaylistMany(selectedItems.map(row => row.track)) },
+      { label: t('Save'), icon: Plus, hidden: selectedItems.every(row => row.saved), disabled: !!saving, onClick: () => saveMany(selectedItems.filter(row => !row.saved), true) },
+      { label: t('Remove'), icon: X, hidden: selectedItems.every(row => !row.saved), disabled: !!saving, onClick: () => saveMany(selectedItems.filter(row => row.saved), false) },
+      { label: t('Download'), icon: Download, hidden: selectedItems.every(row => row.downloaded), disabled: !!saving, onClick: () => downloadMany(selectedItems) },
+      { label: t('Delete download'), icon: Trash2, danger: true, hidden: selectedItems.every(row => !row.downloaded), disabled: !!saving, onClick: () => deleteMany(selectedItems) },
+    ]} />
+    <ContextMenu menu={menu} />
+  </div>
+}
