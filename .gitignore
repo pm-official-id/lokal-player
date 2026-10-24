@@ -7,3 +7,5 @@ build/
 local.properties
 *.apk
 *.dmg
+android-build/**/*.png
+ota-*.png
