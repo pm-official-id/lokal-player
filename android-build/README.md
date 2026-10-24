@@ -21,7 +21,7 @@ v1.4.2, Flutter + Rust) with the same automatic Mornye verification as the deskt
 
 GitHub does not allow files over 100 MB inside the repository, so the APKs are release assets:
 
-**[Lokal-Mobile-1.4.2-autoverify-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-av1/Lokal-Mobile-1.4.2-autoverify-arm64.apk)** — **59 MB, arm64-only. For modern 64-bit phones (anything from ~2018 on). The recommended download.**
+**[Lokal-Mobile-1.4.2-autoverify-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-av2/Lokal-Mobile-1.4.2-autoverify-arm64.apk)** — **59 MB, arm64-only, from release [mobile-v1.4.2-av2](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-av2). For modern 64-bit phones (anything from ~2018 on). The recommended download.**
 
 The earlier 150 MB universal build (all four ABIs, also runs on x86 emulators) is on the same
 release page as `Lokal-Mobile-1.4.2-autoverify.apk`. For comparison, upstream's own releases

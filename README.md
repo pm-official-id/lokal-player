@@ -14,8 +14,8 @@ Get the builds from the [Releases](https://github.com/pm-official-id/lokal-playe
 | `Lokal-11.1.6-arm64.dmg` | macOS (Apple Silicon) desktop app, auto-verify build — unsigned, right-click → Open on first launch |
 | `Lokal-11.1.6-arm64-mac.zip` | same app as a zip |
 | `Lokal-Remote-1.0-debug.apk` | Android remote shell — sideload, then connect to `http://<your-computer>:3421/remote` |
-| `Lokal-Mobile-1.4.2-autoverify-arm64.apk` | the full Android Lokal app with auto-verify, arm64-only (59 MB) — see [android-build/](android-build/) |
-| `Lokal-Mobile-1.4.2-autoverify.apk` | same, universal 150 MB (all ABIs) |
+| `Lokal-Mobile-1.4.2-autoverify-arm64.apk` | the full Android Lokal app — auto-verify + backup & restore, arm64-only 59 MB (`mobile-v1.4.2-av2`) — see [android-build/](android-build/) |
+| `Lokal-Mobile-1.4.2-autoverify.apk` | previous release (`av1`): auto-verify only, universal 150 MB |
 
 ## What changed vs upstream
 
