@@ -1,0 +1,506 @@
+From 1bb65da600c9fed99c2419f24178e6de79f3b27d Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 02:22:14 +0530
+Subject: [PATCH] OTA live updates from the origin repo
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The updater now watches pm-official-id/lokal-player for skins-channel
+releases (mobile-v…-skinsN) instead of upstream. Each release carries
+full-metadata.json (flavor, version, versionCode, sha256) and the arm64
+APK; the app checks on launch and on connectivity, shows the notes,
+downloads through the system downloader, verifies the SHA-256 and the
+package identity, and hands the APK to Android's installer.
+
+The manifest gains REQUEST_INSTALL_PACKAGES and the FileProvider the
+installer code already expected — upstream shipped neither, so its
+install path could not complete. Build code bumped to 1001 so skins4
+offers itself to every earlier build.
+
+Verified live on an emulator: the launch check found skins4 unattended,
+downloaded it, verified it, and raised the system's 'update Lokal Skins'
+prompt. Unit tests cover channel filtering, build comparison, checksum
+and origin-URL enforcement.
+---
+ android/app/src/main/AndroidManifest.xml      |  12 +
+ .../com/mossapps/flick/LokalAppUpdater.kt     |   2 +-
+ .../settings/lokal/groups/about_group.dart    |   2 +-
+ .../updates/github_update_service.dart        |  56 ++--
+ pubspec.yaml                                  |   2 +-
+ .../updates/github_update_service_test.dart   | 253 +++++++++---------
+ 6 files changed, 168 insertions(+), 159 deletions(-)
+
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index e36bec6..6017450 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -8,6 +8,9 @@
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove" />
+     <!-- Internet permission for Last.fm scrobbling and online features -->
+     <uses-permission android:name="android.permission.INTERNET" />
++    <!-- The in-app updater downloads release APKs and hands them to the
++         system installer. -->
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+     <!-- USB Host (optional): for UAC 2.0 DAC/AMP detection on Android -->
+     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+@@ -45,6 +48,15 @@
+         android:roundIcon="@mipmap/ic_lokal_lastwave"
+         android:requestLegacyExternalStorage="true"
+         android:usesCleartextTraffic="true">
++        <provider
++            android:name="androidx.core.content.FileProvider"
++            android:authorities="${applicationId}.updates"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data
++                android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/update_file_paths" />
++        </provider>
+         <meta-data
+             android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+             android:value="com.mossapps.flick.CastOptionsProvider" />
+diff --git a/android/app/src/main/kotlin/com/mossapps/flick/LokalAppUpdater.kt b/android/app/src/main/kotlin/com/mossapps/flick/LokalAppUpdater.kt
+index 2ac85f3..42bffb7 100644
+--- a/android/app/src/main/kotlin/com/mossapps/flick/LokalAppUpdater.kt
++++ b/android/app/src/main/kotlin/com/mossapps/flick/LokalAppUpdater.kt
+@@ -37,7 +37,7 @@ object LokalAppUpdater {
+                         val url = call.argument<String>("url").orEmpty()
+                         val hash = call.argument<String>("sha256").orEmpty()
+                         val code = call.argument<Number>("build")?.toLong() ?: 0L
+-                        require(url.startsWith("https://github.com/Lokal-Konnekt/lokal-mobile/releases/download/") && url.endsWith(".apk"))
++                        require(url.startsWith("https://github.com/pm-official-id/lokal-player/releases/download/") && url.endsWith(".apk"))
+                         require(hash.matches(Regex("[a-fA-F0-9]{64}")) && code > BuildConfig.VERSION_CODE)
+                         val old = prefs.getLong("id", -1)
+                         if (old != -1L) manager.remove(old)
+diff --git a/lib/features/settings/lokal/groups/about_group.dart b/lib/features/settings/lokal/groups/about_group.dart
+index 07a3ba1..51848c2 100644
+--- a/lib/features/settings/lokal/groups/about_group.dart
++++ b/lib/features/settings/lokal/groups/about_group.dart
+@@ -24,7 +24,7 @@ void _push(BuildContext context, Widget page) => unawaited(
+ 
+ /// Where Lokal for Android's releases are published.
+ const lokalReleasesUrl =
+-    'https://github.com/Lokal-Konnekt/lokal-mobile/releases';
++    'https://github.com/pm-official-id/lokal-player/releases';
+ 
+ bool _licencesRegistered = false;
+ 
+diff --git a/lib/features/updates/github_update_service.dart b/lib/features/updates/github_update_service.dart
+index 9d2a76b..cfad292 100644
+--- a/lib/features/updates/github_update_service.dart
++++ b/lib/features/updates/github_update_service.dart
+@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
+ import 'package:flick/providers/app_build_info_provider.dart';
+ 
+ const lokalUpdateReleasesUrl =
+-    'https://github.com/Lokal-Konnekt/lokal-mobile/releases';
++    'https://github.com/pm-official-id/lokal-player/releases';
+ 
+ class LokalUpdateRelease {
+   const LokalUpdateRelease({
+@@ -23,7 +23,7 @@ class LokalUpdateRelease {
+ class GithubUpdateService {
+   GithubUpdateService(this.client);
+   final http.Client client;
+-  static const _repo = 'Lokal-Konnekt/lokal-mobile';
++  static const _repo = 'pm-official-id/lokal-player';
+   static const _headers = {
+     'Accept': 'application/vnd.github+json',
+     'User-Agent': 'Lokal-Mobile',
+@@ -47,47 +47,38 @@ class GithubUpdateService {
+       throw StateError('Unknown APK variant');
+     final current = int.tryParse(installed.build);
+     if (current == null) throw StateError('Installed build number unavailable');
+-    final nightly = installed.version.contains('-nightly.');
++
++    // The skins channel: releases tagged mobile-v…-skinsN, each carrying a
++    // full-metadata.json (flavor, version, versionCode, sha256) and the
++    // arm64 APK. Everything else on the repo (desktop, remote, av builds)
++    // is skipped by the tag filter.
+     final response = await _json(
+-      nightly
+-          ? 'https://api.github.com/repos/$_repo/releases?per_page=20'
+-          : 'https://api.github.com/repos/$_repo/releases/latest',
++      'https://api.github.com/repos/$_repo/releases?per_page=30',
+     );
+-    final data = response is List ? List<dynamic>.of(response) : [response];
+-    // Replacing a stable release preserves its old creation date, so it may
+-    // be below many nightlies in the list. Always include GitHub's stable tip.
+-    if (nightly) {
+-      final stable = await _json(
+-        'https://api.github.com/repos/$_repo/releases/latest',
+-      );
+-      if (stable is Map<String, dynamic>) data.insert(0, stable);
+-    }
+-    final candidates = data
+-        .whereType<Map<String, dynamic>>()
+-        .where(
+-          (r) =>
+-              r['draft'] != true &&
+-              (r['prerelease'] != true ||
+-                  nightly && '${r['tag_name']}'.contains('-nightly.')),
+-        )
+-        .take(4);
++    final releases = response is List ? response : [response];
+     LokalUpdateRelease? newest;
+-    for (final release in candidates) {
++    for (final release in releases.whereType<Map<String, dynamic>>()) {
++      if (release['draft'] == true) continue;
++      final tag = '${release['tag_name']}';
++      if (!tag.startsWith('mobile-v') || !tag.contains('-skins')) continue;
+       final assets = (release['assets'] as List? ?? [])
+           .whereType<Map<String, dynamic>>()
+           .toList();
+-      String? asset(String name) {
++      String? assetUrl(String name) {
+         for (final a in assets) {
+           if (a['name'] == name && a['browser_download_url'] is String) {
+             final url = a['browser_download_url'] as String;
+-            if (url.startsWith('https://github.com/$_repo/releases/download/'))
++            if (url.startsWith(
++              'https://github.com/$_repo/releases/download/',
++            )) {
+               return url;
++            }
+           }
+         }
+         return null;
+       }
+ 
+-      final metadataUrl = asset('$flavor-metadata.json');
++      final metadataUrl = assetUrl('full-metadata.json');
+       if (metadataUrl == null) continue;
+       final metadata = await _json(metadataUrl);
+       if (metadata is! Map || metadata['flavor'] != flavor) continue;
+@@ -97,11 +88,10 @@ class GithubUpdateService {
+       if (code == null ||
+           code <= current ||
+           version == null ||
+-          !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(hash))
++          !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(hash)) {
+         continue;
+-      final apk = asset(
+-        'Lokal-$version${flavor == 'play' ? '-Play' : ''}-universal.apk',
+-      );
++      }
++      final apk = assetUrl('Lokal-Skins-$version-arm64.apk');
+       if (apk == null) continue;
+       if (newest == null || code > newest.build) {
+         newest = LokalUpdateRelease(
+@@ -110,7 +100,7 @@ class GithubUpdateService {
+           apkUrl: apk,
+           sha256: hash.toLowerCase(),
+           pageUrl:
+-              '$lokalUpdateReleasesUrl/tag/${Uri.encodeComponent(release['tag_name'] as String)}',
++              '$lokalUpdateReleasesUrl/tag/${Uri.encodeComponent(tag)}',
+           notes: release['body'] as String? ?? '',
+         );
+       }
+diff --git a/pubspec.yaml b/pubspec.yaml
+index b411b1b..2273385 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -16,7 +16,7 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
+ # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+ # In Windows, build-name is used as the major, minor, and patch parts
+ # of the product and file versions while build-number is used as the build suffix.
+-version: 1.0.0+1000
++version: 1.4.2+1001
+ 
+ environment:
+   sdk: ^3.13.0
+diff --git a/test/features/updates/github_update_service_test.dart b/test/features/updates/github_update_service_test.dart
+index 76804d6..8a757f5 100644
+--- a/test/features/updates/github_update_service_test.dart
++++ b/test/features/updates/github_update_service_test.dart
+@@ -6,155 +6,162 @@ import 'package:flutter_test/flutter_test.dart';
+ import 'package:http/http.dart' as http;
+ import 'package:http/testing.dart';
+ 
+-const root = 'https://github.com/Lokal-Konnekt/lokal-mobile/releases/download';
++const root =
++    'https://github.com/pm-official-id/lokal-player/releases/download';
+ final hash = List.filled(64, 'a').join();
+-Map<String, Object?> release(
+-  String version, {
+-  bool prerelease = false,
++
++Map<String, Object?> skinsRelease(
++  String tag, {
+   bool draft = false,
++  int code = 1001,
++  String version = '1.4.2',
+   String flavor = 'full',
++  String sha = 'a',
++  bool withMetadata = true,
++  bool withApk = true,
+ }) => {
+-  'tag_name': 'v$version',
+-  'prerelease': prerelease,
++  'tag_name': tag,
+   'draft': draft,
+   'body': 'Release notes',
+   'assets': [
+-    {
+-      'name': '$flavor-metadata.json',
+-      'browser_download_url': '$root/v$version/$flavor-metadata.json',
+-    },
+-    {
+-      'name': 'Lokal-$version${flavor == 'play' ? '-Play' : ''}-universal.apk',
+-      'browser_download_url':
+-          '$root/v$version/Lokal-$version${flavor == 'play' ? '-Play' : ''}-universal.apk',
+-    },
++    if (withMetadata)
++      {
++        'name': 'full-metadata.json',
++        'browser_download_url': '$root/$tag/full-metadata.json',
++      },
++    if (withApk)
++      {
++        'name': 'Lokal-Skins-$version-arm64.apk',
++        'browser_download_url': '$root/$tag/Lokal-Skins-$version-arm64.apk',
++      },
+   ],
+ };
+ 
+ void main() {
+-  test(
+-    'same marketing version with higher build offers replacement; no downgrade',
+-    () async {
+-      final client = MockClient(
+-        (r) async => http.Response(
+-          jsonEncode(
+-            r.url.host == 'api.github.com'
+-                ? [release('1.0.0')]
+-                : {
+-                    'version': '1.0.0',
+-                    'versionCode': 200,
+-                    'flavor': 'full',
+-                    'sha256': hash,
+-                  },
+-          ),
++  test('higher build in the skins channel offers an update; no downgrade',
++      () async {
++    final client = MockClient((r) async {
++      if (r.url.host == 'api.github.com') {
++        return http.Response(
++          jsonEncode([skinsRelease('mobile-v1.4.2-skins4')]),
+           200,
+-        ),
+-      );
+-      final service = GithubUpdateService(client);
+-      expect(
+-        (await service.check(
+-          const AppBuildInfo(version: '1.0.0', build: '199'),
+-          'full',
+-        ))?.build,
++        );
++      }
++      return http.Response(
++        jsonEncode({
++          'version': '1.4.2',
++          'versionCode': 1001,
++          'flavor': 'full',
++          'sha256': hash,
++        }),
+         200,
+       );
+-      expect(
+-        await service.check(
+-          const AppBuildInfo(version: '1.0.0', build: '200'),
+-          'full',
+-        ),
+-        isNull,
+-      );
+-      expect(
+-        await service.check(
+-          const AppBuildInfo(version: '1.0.0', build: '201'),
+-          'full',
+-        ),
+-        isNull,
+-      );
+-      client.close();
+-    },
+-  );
++    });
++    final service = GithubUpdateService(client);
++    expect(
++      (await service.check(
++        const AppBuildInfo(version: '1.4.2', build: '1000'),
++        'full',
++      ))?.build,
++      1001,
++    );
++    expect(
++      await service.check(
++        const AppBuildInfo(version: '1.4.2', build: '1001'),
++        'full',
++      ),
++      isNull,
++    );
++    expect(
++      await service.check(
++        const AppBuildInfo(version: '1.4.2', build: '1002'),
++        'full',
++      ),
++      isNull,
++    );
++    client.close();
++  });
+ 
+-  test(
+-    'stable skips nightlies and drafts; nightly finds newer compatible build',
+-    () async {
+-      final client = MockClient(
+-        (r) async => http.Response(
+-          jsonEncode(
+-            r.url.host == 'api.github.com'
+-                ? [
+-                    release('2.0.0', draft: true),
+-                    release('1.0.1-nightly.2', prerelease: true),
+-                    release('1.0.0'),
+-                  ]
+-                : {
+-                    'version': r.url.path.contains('nightly')
+-                        ? '1.0.1-nightly.2'
+-                        : '1.0.0',
+-                    'versionCode': r.url.path.contains('nightly') ? 300 : 200,
+-                    'flavor': 'full',
+-                    'sha256': hash,
+-                  },
+-          ),
++  test('keeps only skins-channel releases with in-repo download URLs',
++      () async {
++    final client = MockClient((r) async {
++      if (r.url.host == 'api.github.com') {
++        return http.Response(
++          jsonEncode([
++            // Desktop, remote-shell and av builds share the repo.
++            skinsRelease('v11.1.6-av2'),
++            skinsRelease('mobile-v1.4.2-av2'),
++            // Drafts never count.
++            skinsRelease('mobile-v1.4.2-skins9', draft: true),
++            // Off-repo metadata must not be fetched.
++            {
++              'tag_name': 'mobile-v1.4.2-skins5',
++              'assets': [
++                {
++                  'name': 'full-metadata.json',
++                  'browser_download_url': 'https://evil.example/full-metadata.json',
++                },
++              ],
++            },
++            skinsRelease('mobile-v1.4.2-skins4'),
++          ]),
+           200,
+-        ),
+-      );
+-      final service = GithubUpdateService(client);
+-      expect(
+-        (await service.check(
+-          const AppBuildInfo(version: '1.0.0', build: '199'),
+-          'full',
+-        ))?.build,
++        );
++      }
++      return http.Response(
++        jsonEncode({
++          'version': '1.4.2',
++          'versionCode': 1001,
++          'flavor': 'full',
++          'sha256': hash,
++        }),
+         200,
+       );
+-      expect(
+-        (await service.check(
+-          const AppBuildInfo(version: '1.0.1-nightly.1', build: '199'),
+-          'full',
+-        ))?.build,
+-        300,
+-      );
+-      client.close();
+-    },
+-  );
++    });
++    final update = await GithubUpdateService(client).check(
++      const AppBuildInfo(version: '1.4.2', build: '1000'),
++      'full',
++    );
++    expect(update?.build, 1001);
++    expect(update?.pageUrl, contains('mobile-v1.4.2-skins4'));
++    client.close();
++  });
+ 
+-  test(
+-    'chooses matching Play asset and rejects invalid checksum metadata',
+-    () async {
+-      var valid = true;
+-      final client = MockClient(
+-        (r) async => http.Response(
+-          jsonEncode(
+-            r.url.host == 'api.github.com'
+-                ? [release('1.0.1', flavor: 'play')]
+-                : {
+-                    'version': '1.0.1',
+-                    'versionCode': 201,
+-                    'flavor': 'play',
+-                    'sha256': valid ? hash : 'bad',
+-                  },
+-          ),
++  test('rejects invalid checksums and picks the newest of several', () async {
++    var valid = true;
++    final client = MockClient((r) async {
++      if (r.url.host == 'api.github.com') {
++        return http.Response(
++          jsonEncode([
++            skinsRelease('mobile-v1.4.2-skins4'),
++            skinsRelease('mobile-v1.4.2-skins5', code: 1002),
++          ]),
+           200,
+-        ),
+-      );
+-      final service = GithubUpdateService(client);
+-      final installed = const AppBuildInfo(version: '1.0.0', build: '200');
+-      expect(
+-        (await service.check(installed, 'play'))?.apkUrl,
+-        endsWith('-Play-universal.apk'),
++        );
++      }
++      return http.Response(
++        jsonEncode({
++          'version': '1.4.2',
++          'versionCode': r.url.path.contains('skins5') ? 1002 : 1001,
++          'flavor': 'full',
++          'sha256': valid ? hash : 'bad',
++        }),
++        200,
+       );
+-      valid = false;
+-      expect(await service.check(installed, 'play'), isNull);
+-      client.close();
+-    },
+-  );
++    });
++    final service = GithubUpdateService(client);
++    final installed = const AppBuildInfo(version: '1.4.2', build: '1000');
++    expect((await service.check(installed, 'full'))?.build, 1002);
++    valid = false;
++    expect(await service.check(installed, 'full'), isNull);
++    client.close();
++  });
+ 
+   test('API failure is not reported as up to date', () async {
+     final client = MockClient((_) async => http.Response('limited', 403));
+     expect(
+       GithubUpdateService(client)
+-          .check(const AppBuildInfo(version: '1.0.0', build: '1'), 'full'),
++          .check(const AppBuildInfo(version: '1.4.2', build: '1000'), 'full'),
+       throwsStateError,
+     );
+     client.close();
+-- 
+2.54.0 (Apple Git-157)
+

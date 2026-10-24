@@ -47,8 +47,15 @@ ships as a **separate app** so it installs alongside the original: applicationId
 `com.lokalkonnekt.konnekted2.skins`, label **“Lokal Skins”**, lime LastWave launcher sticker.
 Both apps can run side by side on one phone.
 
-Download: [Lokal-Skins-1.4.2-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-skins3/Lokal-Skins-1.4.2-arm64.apk)
-(64 MB, arm64) from the [mobile-v1.4.2-skins3](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-skins3) release on this branch.
+Download: [Lokal-Skins-1.4.2-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-skins4/Lokal-Skins-1.4.2-arm64.apk)
+(64 MB, arm64, build 1001) from the [mobile-v1.4.2-skins4](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-skins4) release on this branch.
+
+**OTA live updates** (mobile-v1.4.2-skins4) — the app now updates itself from this repo: on
+launch (and on regained connectivity) it checks for a newer skins release (`mobile-v…-skinsN`
+tags), shows the notes, downloads via the system downloader, verifies SHA-256 and package
+identity, and hands the APK to Android's installer. Each future release needs a higher
+versionCode, a `full-metadata.json` asset, and the APK — the app does the rest. Earlier skins
+builds (code 1000) are offered skins4 automatically.
 
 **Player design style — all of ArchiveTune's styles** (mobile-v1.4.2-skins3) — the picker in
 Settings → Appearance → Now Playing now carries the full set: **Lokal** (the modern player),
@@ -72,5 +79,6 @@ Everything below (auto-verify + backup & restore) is included in the skins build
 | `lokal-mobile-lastwave-skins.patch` | **skins branch only**: the LastWave skins + the standalone Lokal Skins identity (own app id, label, launcher stickers), as one commit |
 | `lokal-mobile-player-design-style.patch` | the Player design style setting (Lokal / Classic / Immersive) as one commit |
 | `lokal-mobile-all-archive-styles.patch` | all ten ArchiveTune design styles through one parameterized screen, as one commit |
+| `lokal-mobile-ota-updates.patch` | OTA live updates from this repo: channel check, verified download, system install, manifest fixes |
 | `lokal-mobile-abi-override.patch` | optional build patch: a `LOKAL_ABIS` environment variable that limits `ndk abiFilters`, the `copyNdkLibs` staging and `jniLibs` packaging to the built ABI (59 MB arm64 vs 150 MB universal); unset, the build is unchanged |
 | `SHA256SUMS` | checksums of the release APKs |
