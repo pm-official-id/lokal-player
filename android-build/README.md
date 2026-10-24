@@ -47,14 +47,19 @@ ships as a **separate app** so it installs alongside the original: applicationId
 `com.lokalkonnekt.konnekted2.skins`, label **“Lokal Skins”**, lime LastWave launcher sticker.
 Both apps can run side by side on one phone.
 
-Download: [Lokal-Skins-1.4.2-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-skins2/Lokal-Skins-1.4.2-arm64.apk)
-(64 MB, arm64) from the [mobile-v1.4.2-skins2](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-skins2) release on this branch.
+Download: [Lokal-Skins-1.4.2-arm64.apk](https://github.com/pm-official-id/lokal-player/releases/download/mobile-v1.4.2-skins3/Lokal-Skins-1.4.2-arm64.apk)
+(64 MB, arm64) from the [mobile-v1.4.2-skins3](https://github.com/pm-official-id/lokal-player/releases/tag/mobile-v1.4.2-skins3) release on this branch.
 
-**Player design style** (mobile-v1.4.2-skins2) — ported after ArchiveTune's setting of the same
-name: a persisted choice in Settings → Appearance → Now Playing between **Lokal** (the modern
-player), **Classic** (the previously unreached classic layout) and **Immersive** (edge-to-edge
-artwork, absorbing the old Fullscreen cover toggle — the preference migrates on load). Every
-path that opens Now Playing routes by the style. Supersedes the skins1 APK.
+**Player design style — all of ArchiveTune's styles** (mobile-v1.4.2-skins3) — the picker in
+Settings → Appearance → Now Playing now carries the full set: **Lokal** (the modern player),
+**Classic (Lokal)** (Lokal's own classic screen; the first port's 'classic' key migrates
+there), and all ten ArchiveTune styles — **Classic, Modern, Minimal, Cinematic, Little,
+Expressive, Immersive, Immersive X, Material X, Editorial**. Nine render through one
+parameterized screen whose spec table follows the originals' distinguishing traits (Little's
+tinted compactness with progress across the art, Immersive X's full-bleed white-on-black,
+Material X's artwork wash behind a tinted control card, Editorial's left-set type); Immersive
+remains the modern screen with edge-to-edge artwork (the old Fullscreen cover preference
+migrates on load). All twelve share the same playback wiring. Supersedes skins1/skins2.
 
 Everything below (auto-verify + backup & restore) is included in the skins build too.
 
@@ -65,6 +70,7 @@ Everything below (auto-verify + backup & restore) is included in the skins build
 | `lokal-mobile-auto-verify.patch` | the auto-verify feature as a single commit (`git am`) — adds `lib/features/morneye/morneye_auto_verify.dart`, `hadSession()` in `morneye_packages.dart`, the start-up hook in `lib/main.dart`, and `test/morneye/morneye_auto_verify_test.dart` |
 | `lokal-mobile-backup-restore.patch` | the backup & restore feature as a single commit (`git am`): `lib/services/backup_service.dart`, a Backup section in the settings Data group, and round-trip tests |
 | `lokal-mobile-lastwave-skins.patch` | **skins branch only**: the LastWave skins + the standalone Lokal Skins identity (own app id, label, launcher stickers), as one commit |
-| `lokal-mobile-player-design-style.patch` | the Player design style port (ArchiveTune-style setting: Lokal / Classic / Immersive) as one commit |
+| `lokal-mobile-player-design-style.patch` | the Player design style setting (Lokal / Classic / Immersive) as one commit |
+| `lokal-mobile-all-archive-styles.patch` | all ten ArchiveTune design styles through one parameterized screen, as one commit |
 | `lokal-mobile-abi-override.patch` | optional build patch: a `LOKAL_ABIS` environment variable that limits `ndk abiFilters`, the `copyNdkLibs` staging and `jniLibs` packaging to the built ABI (59 MB arm64 vs 150 MB universal); unset, the build is unchanged |
 | `SHA256SUMS` | checksums of the release APKs |

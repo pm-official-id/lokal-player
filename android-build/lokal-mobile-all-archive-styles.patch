@@ -1,0 +1,836 @@
+From 50c4c102f1d022509276ca52ab377ecabe90530a Mon Sep 17 00:00:00 2001
+From: pm-official-id <pm-official-id@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 01:19:11 +0530
+Subject: [PATCH] All ten ArchiveTune player design styles
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The picker now carries ArchiveTune's full set — Classic, Modern, Minimal,
+Cinematic, Little, Expressive, Immersive, Immersive Extended, Material
+Extended, Editorial — alongside Lokal's modern player and its classic
+screen (the first port's 'classic' key migrates there). Nine of the ten
+render through one parameterized screen whose spec table follows the
+traits that distinguish the originals: Little's tinted compactness with
+progress across the art, Immersive Extended's full-bleed white-on-black,
+Material Extended's artwork wash behind a tinted control card, Editorial's
+left-set type on a quiet field. Immersive remains the modern screen with
+edge-to-edge artwork. All twelve styles share the same playback wiring.
+
+Verified on an emulator: Little and Editorial render as designed.
+---
+ lib/core/theme/lokal_appearance.dart          |  44 +-
+ lib/core/utils/navigation_helper.dart         |  11 +-
+ .../screens/archive_style_player_screen.dart  | 619 ++++++++++++++++++
+ test/core/theme/lokal_appearance_test.dart    |  23 +-
+ .../player/archive_style_spec_test.dart       |  44 ++
+ 5 files changed, 730 insertions(+), 11 deletions(-)
+ create mode 100644 lib/features/player/screens/archive_style_player_screen.dart
+ create mode 100644 test/features/player/archive_style_spec_test.dart
+
+diff --git a/lib/core/theme/lokal_appearance.dart b/lib/core/theme/lokal_appearance.dart
+index 96205ac..087bf8b 100644
+--- a/lib/core/theme/lokal_appearance.dart
++++ b/lib/core/theme/lokal_appearance.dart
+@@ -15,18 +15,48 @@ enum LokalPerformanceLevel { full, performance, ultra }
+ /// Fullscreen cover toggle.
+ enum LokalPlayerDesignStyle {
+   lokal('Lokal'),
+-  classic('Classic'),
+-  immersive('Immersive');
++  lokalClassic('Classic (Lokal)'),
++  atClassic('Classic'),
++  atModern('Modern'),
++  atMinimal('Minimal'),
++  atCinematic('Cinematic'),
++  atLittle('Little'),
++  atExpressive('Expressive'),
++  immersive('Immersive'),
++  atImmersiveX('Immersive X'),
++  atMaterialX('Material X'),
++  atEditorial('Editorial');
+ 
+   const LokalPlayerDesignStyle(this.label);
+ 
+   final String label;
+ 
+-  static LokalPlayerDesignStyle fromKey(String? key) =>
+-      LokalPlayerDesignStyle.values.firstWhere(
+-        (style) => style.name == key,
+-        orElse: () => LokalPlayerDesignStyle.lokal,
+-      );
++  static LokalPlayerDesignStyle fromKey(String? key) {
++    // The first port's 'classic' was Lokal's own classic screen.
++    if (key == 'classic') return LokalPlayerDesignStyle.lokalClassic;
++    return LokalPlayerDesignStyle.values.firstWhere(
++      (style) => style.name == key,
++      orElse: () => LokalPlayerDesignStyle.lokal,
++    );
++  }
++
++  /// ArchiveTune's ten design styles, in its picker's order.
++  static const List<LokalPlayerDesignStyle> archiveStyles = [
++    atClassic,
++    atModern,
++    atMinimal,
++    atCinematic,
++    atLittle,
++    atExpressive,
++    immersive,
++    atImmersiveX,
++    atMaterialX,
++    atEditorial,
++  ];
++
++  /// Whether this screen is one of ArchiveTune's layouts.
++  bool get isArchiveStyle =>
++      this != lokal && this != lokalClassic && this != immersive;
+ }
+ 
+ /// The listener's look: theme, accent, text size and glass.
+diff --git a/lib/core/utils/navigation_helper.dart b/lib/core/utils/navigation_helper.dart
+index 02204d6..975af13 100644
+--- a/lib/core/utils/navigation_helper.dart
++++ b/lib/core/utils/navigation_helper.dart
+@@ -1,6 +1,7 @@
+ import 'dart:async';
+ 
+ import 'package:flick/core/theme/lokal_appearance.dart';
++import 'package:flick/features/player/screens/archive_style_player_screen.dart';
+ import 'package:flick/features/player/screens/classic_full_player_screen.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+@@ -221,7 +222,11 @@ Widget playerScreenFor(BuildContext context, Key? playerKey, String heroTag) {
+   } catch (_) {
+     // Widget tests navigate without a ProviderScope: the modern player.
+   }
+-  return style == LokalPlayerDesignStyle.classic
+-      ? ClassicFullPlayerScreen(heroTag: heroTag)
+-      : FullPlayerScreen(key: playerKey, heroTag: heroTag);
++  if (style == LokalPlayerDesignStyle.lokalClassic) {
++    return ClassicFullPlayerScreen(heroTag: heroTag);
++  }
++  if (style.isArchiveStyle) {
++    return ArchiveStylePlayerScreen(style: style);
++  }
++  return FullPlayerScreen(key: playerKey, heroTag: heroTag);
+ }
+diff --git a/lib/features/player/screens/archive_style_player_screen.dart b/lib/features/player/screens/archive_style_player_screen.dart
+new file mode 100644
+index 0000000..ff8d58f
+--- /dev/null
++++ b/lib/features/player/screens/archive_style_player_screen.dart
+@@ -0,0 +1,619 @@
++import 'dart:ui';
++
++import 'package:flick/core/theme/lokal_appearance.dart';
++import 'package:flick/core/theme/lokal_tokens.dart';
++import 'package:flick/core/utils/duration_format.dart';
++import 'package:flick/models/song.dart';
++import 'package:flick/services/player_service.dart';
++import 'package:flick/widgets/common/cached_image_widget.dart';
++import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
++import 'package:lucide_icons_flutter/lucide_icons.dart';
++
++/// ArchiveTune's ten player design styles, rebuilt on Lokal's tokens and
++/// playback service: one screen, one spec per style. The specs follow the
++/// traits that distinguish the originals (rukamori/ArchiveTune Player.kt):
++/// Classic's centered layout, Little's tinted compactness with the progress
++/// across the art, Immersive Extended's full-bleed white-on-black, Material
++/// Extended's dynamic tinting, Editorial's typographic field, and so on.
++
++enum ArchiveStyleBg { theme, tint, gradient, black, field, blur }
++
++@immutable
++class ArchiveStyleSpec {
++  const ArchiveStyleSpec({
++    required this.artScale,
++    required this.artCorner,
++    required this.topSpace,
++    required this.titleSize,
++    required this.leftAlign,
++    required this.bg,
++    this.whiteOnBlack = false,
++    this.progressOnArt = false,
++    this.bigControls = false,
++    this.showChips = false,
++    this.compact = false,
++    this.tintedPanel = false,
++  });
++
++  /// Artwork width as a fraction of the screen width.
++  final double artScale;
++  final double artCorner;
++  final double topSpace;
++  final double titleSize;
++  final bool leftAlign;
++  final ArchiveStyleBg bg;
++  final bool whiteOnBlack;
++  final bool progressOnArt;
++  final bool bigControls;
++  final bool showChips;
++  final bool compact;
++  final bool tintedPanel;
++
++  static const Map<LokalPlayerDesignStyle, ArchiveStyleSpec> specs = {
++    // V1 Classic: the traditional centered layout.
++    LokalPlayerDesignStyle.atClassic: ArchiveStyleSpec(
++      artScale: .74,
++      artCorner: 10,
++      topSpace: 64,
++      titleSize: 20,
++      leftAlign: false,
++      bg: ArchiveStyleBg.theme,
++    ),
++    // V2 Modern: bigger rounded art, info chips.
++    LokalPlayerDesignStyle.atModern: ArchiveStyleSpec(
++      artScale: .84,
++      artCorner: 22,
++      topSpace: 52,
++      titleSize: 22,
++      leftAlign: false,
++      bg: ArchiveStyleBg.theme,
++      showChips: true,
++    ),
++    // V3 Minimal: smaller art, quiet text, nothing extra.
++    LokalPlayerDesignStyle.atMinimal: ArchiveStyleSpec(
++      artScale: .66,
++      artCorner: 14,
++      topSpace: 84,
++      titleSize: 18,
++      leftAlign: false,
++      bg: ArchiveStyleBg.theme,
++    ),
++    // V4 Cinematic: near-full art, gradient wash, larger title.
++    LokalPlayerDesignStyle.atCinematic: ArchiveStyleSpec(
++      artScale: .92,
++      artCorner: 8,
++      topSpace: 40,
++      titleSize: 24,
++      leftAlign: false,
++      bg: ArchiveStyleBg.gradient,
++      showChips: true,
++    ),
++    // V5 Little: compact, tinted, progress across the art.
++    LokalPlayerDesignStyle.atLittle: ArchiveStyleSpec(
++      artScale: .46,
++      artCorner: 18,
++      topSpace: 110,
++      titleSize: 18,
++      leftAlign: false,
++      bg: ArchiveStyleBg.tint,
++      progressOnArt: true,
++      compact: true,
++    ),
++    // V6 Expressive: generous curves and a colour wash.
++    LokalPlayerDesignStyle.atExpressive: ArchiveStyleSpec(
++      artScale: .84,
++      artCorner: 30,
++      topSpace: 52,
++      titleSize: 22,
++      leftAlign: false,
++      bg: ArchiveStyleBg.gradient,
++      showChips: true,
++      bigControls: true,
++    ),
++    // V8 Immersive Extended: square full-bleed art, white on black.
++    LokalPlayerDesignStyle.atImmersiveX: ArchiveStyleSpec(
++      artScale: .97,
++      artCorner: 0,
++      topSpace: 28,
++      titleSize: 22,
++      leftAlign: false,
++      bg: ArchiveStyleBg.black,
++      whiteOnBlack: true,
++      bigControls: true,
++    ),
++    // V9 Material Extended: artwork wash behind a tinted control card.
++    LokalPlayerDesignStyle.atMaterialX: ArchiveStyleSpec(
++      artScale: .88,
++      artCorner: 26,
++      topSpace: 44,
++      titleSize: 22,
++      leftAlign: false,
++      bg: ArchiveStyleBg.blur,
++      showChips: true,
++      tintedPanel: true,
++    ),
++    // V10 Editorial: typographic, left-set, on a tinted field.
++    LokalPlayerDesignStyle.atEditorial: ArchiveStyleSpec(
++      artScale: .60,
++      artCorner: 0,
++      topSpace: 96,
++      titleSize: 28,
++      leftAlign: true,
++      bg: ArchiveStyleBg.field,
++    ),
++  };
++}
++
++class ArchiveStylePlayerScreen extends StatefulWidget {
++  const ArchiveStylePlayerScreen({super.key, required this.style});
++
++  final LokalPlayerDesignStyle style;
++
++  @override
++  State<ArchiveStylePlayerScreen> createState() =>
++      _ArchiveStylePlayerScreenState();
++}
++
++class _ArchiveStylePlayerScreenState extends State<ArchiveStylePlayerScreen> {
++  final PlayerService _player = PlayerService();
++  Duration? _dragPosition;
++  late final Listenable _changes;
++
++  @override
++  void initState() {
++    super.initState();
++    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
++    _changes = Listenable.merge([
++      _player.currentSongNotifier,
++      _player.isPlayingNotifier,
++      _player.positionNotifier,
++      _player.durationNotifier,
++    ]);
++  }
++
++  @override
++  void dispose() {
++    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
++    super.dispose();
++  }
++
++  ArchiveStyleSpec get _spec =>
++      ArchiveStyleSpec.specs[widget.style] ?? ArchiveStyleSpec.specs.values.first;
++
++  @override
++  Widget build(BuildContext context) {
++    final t = context.lokal;
++    final spec = _spec;
++    return AnnotatedRegion<SystemUiOverlayStyle>(
++      value: SystemUiOverlayStyle.light,
++      child: Scaffold(
++        backgroundColor: _background(context),
++        body: Stack(
++          fit: StackFit.expand,
++          children: [
++            if (_backgroundLayer != null) Positioned.fill(child: _backgroundLayer!),
++            SafeArea(
++          child: AnimatedBuilder(
++            animation: _changes,
++            builder: (context, _) {
++              final song = _player.currentSongNotifier.value;
++              final playing = _player.isPlayingNotifier.value;
++              final duration = _player.durationNotifier.value;
++              final position = _dragPosition ??
++                  _player.positionNotifier.value;
++              return Column(
++                children: [
++                  _header(context, song, spec, t),
++                  Expanded(
++                    child: SingleChildScrollView(
++                      child: Padding(
++                        padding: EdgeInsets.symmetric(
++                          horizontal: 24,
++                          vertical: spec.compact ? 12 : 24,
++                        ),
++                        child: Column(
++                          children: [
++                            SizedBox(height: spec.topSpace * .35),
++                            _artwork(context, song, spec, position, duration),
++                            SizedBox(
++                              height: spec.compact ? 18 : spec.topSpace * .65,
++                            ),
++                            _titleBlock(song, spec, t),
++                            SizedBox(height: spec.compact ? 10 : 22),
++                            if (spec.tintedPanel)
++                              Container(
++                                decoration: BoxDecoration(
++                                  color: t.accentTile,
++                                  borderRadius: BorderRadius.circular(26),
++                                  border: Border.all(color: t.accentTileBorder),
++                                ),
++                                padding: const EdgeInsets.all(18),
++                                child: _seekAndControls(
++                                  context,
++                                  position,
++                                  duration,
++                                  playing,
++                                  spec,
++                                  t,
++                                ),
++                              )
++                            else
++                              _seekAndControls(
++                                context,
++                                position,
++                                duration,
++                                playing,
++                                spec,
++                                t,
++                              ),
++                            if (spec.showChips) _chips(song, t),
++                          ],
++                        ),
++                      ),
++                    ),
++                  ),
++                ],
++              );
++            },
++          ),
++        ),
++        ],
++      ),
++      ),
++    );
++  }
++
++  Color _background(BuildContext context) {
++    final t = context.lokal;
++    switch (_spec.bg) {
++      case ArchiveStyleBg.tint:
++        return t.accentTile;
++      case ArchiveStyleBg.field:
++        return Color.alphaBlend(t.accentTile, t.bg);
++      case ArchiveStyleBg.gradient:
++        return t.bg;
++      case ArchiveStyleBg.black:
++        return Colors.black;
++      case ArchiveStyleBg.blur:
++      case ArchiveStyleBg.theme:
++        return t.bg;
++    }
++  }
++
++  Widget? get _backgroundLayer {
++    switch (_spec.bg) {
++      case ArchiveStyleBg.gradient:
++        return Builder(
++          builder: (context) {
++            final t = context.lokal;
++            return DecoratedBox(
++              decoration: BoxDecoration(
++                gradient: LinearGradient(
++                  begin: Alignment.topCenter,
++                  end: Alignment.bottomCenter,
++                  colors: [
++                    t.accent.withValues(alpha: .18),
++                    t.bg,
++                    t.bg,
++                  ],
++                ),
++              ),
++              child: const SizedBox.expand(),
++            );
++          },
++        );
++      case ArchiveStyleBg.blur:
++        final song = _player.currentSongNotifier.value;
++        return ImageFiltered(
++          imageFilter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
++          child: Transform.scale(
++            scale: 1.4,
++            child: Opacity(
++              opacity: .5,
++              child: Center(
++                child: CachedImageWidget(
++                  imagePath: song?.albumArt,
++                  audioSourcePath: song?.filePath,
++                  fit: BoxFit.cover,
++                ),
++              ),
++            ),
++          ),
++        );
++      default:
++        return null;
++    }
++  }
++
++  Widget _header(
++    BuildContext context,
++    Song? song,
++    ArchiveStyleSpec spec,
++    LokalTokens t,
++  ) {
++    final onBg = spec.whiteOnBlack ? Colors.white : t.text;
++    return Padding(
++      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
++      child: Row(
++        children: [
++          IconButton(
++            icon: Icon(LucideIcons.chevronDown, color: onBg),
++            onPressed: () => Navigator.of(context).maybePop(),
++          ),
++          Expanded(
++            child: Column(
++              children: [
++                Text(
++                  'NOW PLAYING',
++                  style: TextStyle(
++                    fontSize: 10,
++                    letterSpacing: 1.6,
++                    fontWeight: FontWeight.w600,
++                    color: onBg.withValues(alpha: .55),
++                  ),
++                ),
++              ],
++            ),
++          ),
++          const SizedBox(width: 48),
++        ],
++      ),
++    );
++  }
++
++  Widget _artwork(
++    BuildContext context,
++    Song? song,
++    ArchiveStyleSpec spec,
++    Duration position,
++    Duration duration,
++  ) {
++    final width = MediaQuery.of(context).size.width * spec.artScale;
++    final art = SizedBox(
++      width: width,
++      height: width,
++      child: ClipRRect(
++        borderRadius: BorderRadius.circular(spec.artCorner),
++        child: Stack(
++          fit: StackFit.expand,
++          children: [
++            CachedImageWidget(
++              imagePath: song?.albumArt,
++              audioSourcePath: song?.filePath,
++              fit: BoxFit.cover,
++            ),
++            if (song == null)
++              ColoredBox(
++                color: context.lokal.surface3,
++                child: Center(
++                  child: Icon(
++                    LucideIcons.music,
++                    size: 56,
++                    color: context.lokal.muted,
++                  ),
++                ),
++              ),
++            // Little draws its progress straight across the artwork.
++            if (spec.progressOnArt && duration.inMilliseconds > 0)
++              Align(
++                alignment: Alignment.bottomCenter,
++                child: LinearProgressIndicator(
++                  value: position.inMilliseconds / duration.inMilliseconds,
++                  minHeight: 5,
++                  backgroundColor: Colors.black26,
++                  valueColor: AlwaysStoppedAnimation(context.lokal.accent),
++                ),
++              ),
++          ],
++        ),
++      ),
++    );
++    return Center(child: art);
++  }
++
++  Widget _titleBlock(Song? song, ArchiveStyleSpec spec, LokalTokens t) {
++    final color = spec.whiteOnBlack ? Colors.white : t.text;
++    final align =
++        spec.leftAlign ? TextAlign.left : TextAlign.center;
++    return Column(
++      crossAxisAlignment: spec.leftAlign
++          ? CrossAxisAlignment.start
++          : CrossAxisAlignment.center,
++      children: [
++        Text(
++          song?.title ?? 'Not playing',
++          textAlign: align,
++          maxLines: 2,
++          overflow: TextOverflow.ellipsis,
++          style: TextStyle(
++            fontSize: spec.titleSize,
++            height: 1.15,
++            fontWeight: spec.leftAlign ? FontWeight.w800 : FontWeight.w700,
++            letterSpacing: spec.leftAlign ? -.5 : 0,
++            color: color,
++          ),
++        ),
++        const SizedBox(height: 6),
++        Text(
++          song?.artist ?? '',
++          textAlign: align,
++          maxLines: 1,
++          overflow: TextOverflow.ellipsis,
++          style: TextStyle(
++            fontSize: spec.leftAlign ? 16 : 14,
++            color: color.withValues(alpha: .6),
++          ),
++        ),
++      ],
++    );
++  }
++
++  Widget _seekAndControls(
++    BuildContext context,
++    Duration position,
++    Duration duration,
++    bool playing,
++    ArchiveStyleSpec spec,
++    LokalTokens t,
++  ) {
++    final accent = spec.whiteOnBlack ? Colors.white : t.accent;
++    final trackDim = spec.whiteOnBlack
++        ? Colors.white.withValues(alpha: .25)
++        : t.border;
++    final labelColor = spec.whiteOnBlack
++        ? Colors.white.withValues(alpha: .8)
++        : t.muted;
++    final totalMs = duration.inMilliseconds;
++    return Column(
++      children: [
++        SizedBox(
++          height: 32,
++          child: Slider(
++            value: totalMs > 0
++                ? (position.inMilliseconds / totalMs).clamp(0.0, 1.0)
++                : 0.0,
++            onChangeStart: (_) => setState(() => _dragPosition = position),
++            onChanged: (fraction) =>
++                setState(() => _dragPosition = Duration(
++                      milliseconds: (totalMs * fraction).round(),
++                    )),
++            onChangeEnd: (fraction) {
++              _player.seek(Duration(milliseconds: (totalMs * fraction).round()));
++              _dragPosition = null;
++              setState(() {});
++            },
++            activeColor: accent,
++            inactiveColor: trackDim,
++          ),
++        ),
++        Padding(
++          padding: const EdgeInsets.symmetric(horizontal: 8),
++          child: Row(
++            mainAxisAlignment: MainAxisAlignment.spaceBetween,
++            children: [
++              Text(formatDuration(position), style: TextStyle(fontSize: 12, color: labelColor)),
++              Text(formatDuration(duration), style: TextStyle(fontSize: 12, color: labelColor)),
++            ],
++          ),
++        ),
++        SizedBox(height: spec.compact ? 2 : 12),
++        Row(
++          mainAxisAlignment: MainAxisAlignment.center,
++          children: [
++            _control(
++              LucideIcons.skipBack,
++              () => _player.previous(),
++              color: accent,
++              dim: labelColor,
++              size: spec.compact ? 34 : 44,
++              spec: spec,
++            ),
++            SizedBox(width: spec.compact ? 18 : 28),
++            _control(
++              playing ? LucideIcons.pause : LucideIcons.play,
++              () {
++                HapticFeedback.selectionClick();
++                _player.togglePlayPause();
++              },
++              filled: true,
++              color: accent,
++              dim: labelColor,
++              size: spec.bigControls
++                  ? 84
++                  : spec.compact
++                  ? 56
++                  : 68,
++              spec: spec,
++            ),
++            SizedBox(width: spec.compact ? 18 : 28),
++            _control(
++              LucideIcons.skipForward,
++              () => _player.next(),
++              color: accent,
++              dim: labelColor,
++              size: spec.compact ? 34 : 44,
++              spec: spec,
++            ),
++          ],
++        ),
++      ],
++    );
++  }
++
++  Widget _control(
++    IconData icon,
++    VoidCallback onPressed, {
++    bool filled = false,
++    required Color color,
++    required Color dim,
++    required double size,
++    required ArchiveStyleSpec spec,
++  }) {
++    if (!filled) {
++      return IconButton(
++        icon: Icon(icon, size: size * .58),
++        color: dim,
++        onPressed: onPressed,
++      );
++    }
++    // Immersive Extended plays from a white disc; the rest use the accent.
++    final disc = spec.whiteOnBlack ? Colors.white : color;
++    final iconColor = spec.whiteOnBlack ? Colors.black : tOnAccent(disc, spec);
++    return Material(
++      color: disc,
++      shape: const CircleBorder(),
++      child: InkWell(
++        customBorder: const CircleBorder(),
++        onTap: onPressed,
++        child: SizedBox(
++          width: size,
++          height: size,
++          child: Icon(icon, size: size * .42, color: iconColor),
++        ),
++      ),
++    );
++  }
++
++  Color tOnAccent(Color disc, ArchiveStyleSpec spec) {
++    // The theme's own onAccent rule, without needing the tokens here.
++    return spec.whiteOnBlack
++        ? Colors.black
++        : (disc.computeLuminance() > .5
++              ? const Color(0xFF0A0A0A)
++              : Colors.white);
++  }
++
++  Widget _chips(Song? song, LokalTokens t) {
++    final parts = [
++      if (song?.resolution?.isNotEmpty == true) song!.resolution!,
++      if (song?.fileType.isNotEmpty == true) song!.fileType.toUpperCase(),
++    ];
++    if (parts.isEmpty) return const SizedBox.shrink();
++    return Padding(
++      padding: const EdgeInsets.only(top: 18),
++      child: Wrap(
++        spacing: 8,
++        children: [
++          for (final part in parts)
++            Container(
++              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
++              decoration: BoxDecoration(
++                color: t.accentTile,
++                borderRadius: BorderRadius.circular(999),
++                border: Border.all(color: t.accentTileBorder),
++              ),
++              child: Text(
++                part,
++                style: TextStyle(
++                  fontSize: 11,
++                  letterSpacing: .8,
++                  color: t.muted,
++                ),
++              ),
++            ),
++        ],
++      ),
++    );
++  }
++}
+diff --git a/test/core/theme/lokal_appearance_test.dart b/test/core/theme/lokal_appearance_test.dart
+index 5fd223e..e78aa7d 100644
+--- a/test/core/theme/lokal_appearance_test.dart
++++ b/test/core/theme/lokal_appearance_test.dart
+@@ -74,7 +74,7 @@ void main() {
+ 
+   test('the player design style round-trips and drives fullscreen cover', () {
+     const look = LokalAppearance(
+-      playerDesignStyle: LokalPlayerDesignStyle.classic,
++      playerDesignStyle: LokalPlayerDesignStyle.lokalClassic,
+     );
+     expect(LokalAppearance.fromJson(look.toJson()), look);
+     expect(look.fullscreenCover, isFalse);
+@@ -84,6 +84,27 @@ void main() {
+     expect(immersive.fullscreenCover, isTrue);
+   });
+ 
++  test('all of ArchiveTune\'s design styles persist, and old keys migrate', () {
++    for (final style in LokalPlayerDesignStyle.values) {
++      expect(LokalAppearance.fromJson({'playerDesignStyle': style.name})
++          .playerDesignStyle, style);
++    }
++    // The first port's Classic pointed at Lokal's own classic screen.
++    expect(
++      LokalAppearance.fromJson(const {'playerDesignStyle': 'classic'})
++          .playerDesignStyle,
++      LokalPlayerDesignStyle.lokalClassic,
++    );
++    expect(
++      LokalPlayerDesignStyle.archiveStyles,
++      hasLength(10),
++      reason: 'ArchiveTune ships ten design styles',
++    );
++    expect(LokalPlayerDesignStyle.atImmersiveX.isArchiveStyle, isTrue);
++    expect(LokalPlayerDesignStyle.immersive.isArchiveStyle, isFalse,
++        reason: 'Immersive stays the modern screen with edge-to-edge art');
++  });
++
+   test('the old fullscreen-cover preference becomes the Immersive style', () {
+     final migrated = LokalAppearance.fromJson(const {
+       'fullscreenCover': true,
+diff --git a/test/features/player/archive_style_spec_test.dart b/test/features/player/archive_style_spec_test.dart
+new file mode 100644
+index 0000000..3377fa0
+--- /dev/null
++++ b/test/features/player/archive_style_spec_test.dart
+@@ -0,0 +1,44 @@
++import 'package:flick/core/theme/lokal_appearance.dart';
++import 'package:flick/features/player/screens/archive_style_player_screen.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++void main() {
++  test('every ArchiveTune style has a distinct spec', () {
++    // Immersive routes to the modern screen with edge-to-edge artwork; the
++    // other nine ArchiveTune styles render through the spec table.
++    for (final style in LokalPlayerDesignStyle.archiveStyles
++        .where((s) => s != LokalPlayerDesignStyle.immersive)) {
++      final spec = ArchiveStyleSpec.specs[style];
++      expect(spec, isNotNull, reason: style.name);
++    }
++    final arts = {
++      for (final entry in ArchiveStyleSpec.specs.entries)
++        entry.key: entry.value.artScale,
++    };
++    // Little is the smallest artwork, Immersive Extended the largest.
++    expect(
++      arts[LokalPlayerDesignStyle.atLittle]!,
++      lessThan(arts[LokalPlayerDesignStyle.atClassic]!),
++    );
++    expect(
++      arts[LokalPlayerDesignStyle.atImmersiveX]!,
++      greaterThan(arts[LokalPlayerDesignStyle.atCinematic]!),
++    );
++    expect(
++      ArchiveStyleSpec.specs[LokalPlayerDesignStyle.atEditorial]!.leftAlign,
++      isTrue,
++      reason: 'Editorial sets its type to the left',
++    );
++    expect(
++      ArchiveStyleSpec.specs[LokalPlayerDesignStyle.atLittle]!.progressOnArt,
++      isTrue,
++      reason: 'Little draws its progress across the artwork',
++    );
++    expect(
++      ArchiveStyleSpec.specs[LokalPlayerDesignStyle.atImmersiveX]!
++          .whiteOnBlack,
++      isTrue,
++      reason: 'Immersive Extended plays white on black',
++    );
++  });
++}
+-- 
+2.54.0 (Apple Git-157)
+
